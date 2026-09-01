@@ -33,8 +33,8 @@ STORICO REVISIONI:
 - Rev. 4 (GEMINI): 30/06/2026 - Modifica della JOIN su tabella INOX. Sostituito il campo di confronto 
   con RT00_OPZIONE_MG58_MP ed introdotta la decodifica dinamica della lunghezza assoluta 
   (formato L----) per includere anche i valori maggiori o uguali (>=) rispetto alla riga documento.
-	Rev.5 (BANDERA) a seguito di segnalazione Beccalori del 28/08/2026 ordine n. 4822 riga 20 8e similari), si aaggiunge una clausola di esclusione per eliminare le viti INOX la cui 
-	DO05_DESCRIZIONE not like %lavorazion%
+	Rev.5 (BANDERA) a seguito di segnalazione Beccalori del 28/08/2026 ordine n. 4822 riga 20 e similari), si aaggiunge una clausola di esclusione per eliminare le viti INOX la cui 
+	DO05_DESCRIZIONE not like %lavorazion% (sostituito poi con controllo DO36_INDST1 <> 4 per performance)
 ================================================================================================
 */
 CREATE OR ALTER    VIEW [dbo].[VPRT_DIBA_LOCALIZZATA_RTP]
@@ -58,6 +58,7 @@ SELECT TOP (100) PERCENT
             CORPO.DO30_CODART_MG66,
             CORPO.DO30_OPZIONE_MG5E,
             STATI.CO4H_IDSTATO_CO4C,
+			STATI_DES.CO4C_DESCRIZIONE,
             TESTATA.DO11_DATADOC,
             CORPO.DO30_PROGRIGA,
             
@@ -82,7 +83,8 @@ FROM        dbo.DO11_DOCTESTATA AS TESTATA WITH (NOLOCK)
         -- Determinazione dello Stato Attuale della riga
         INNER JOIN dbo.CO4H_STATIATTUALI AS STATI WITH (NOLOCK)
             ON  CORPO.DO30_GUID = STATI.CO4H_GUID 
-        
+        INNER JOIN dbo.CO4C_STATI AS STATI_DES  WITH (NOLOCK)
+		    ON	STATI.CO4H_IDSTATO_CO4C = STATI_DES.CO4C_IDSTATO
         -- Anagrafica Articolo
         INNER JOIN dbo.MG66_ANAGRART AS ANAGRART WITH (NOLOCK)
             ON  CORPO.DO30_DITTA_CG18 = ANAGRART.MG66_DITTA_CG18 
@@ -104,10 +106,6 @@ FROM        dbo.DO11_DOCTESTATA AS TESTATA WITH (NOLOCK)
             ON  CORPO.DO30_DITTA_CG18 = DECODE_INDST1.DO36_DITTA_CG18 
             AND CORPO.DO30_NUMREG_CO99 = DECODE_INDST1.DO36_NUMREG_CO99 
             AND CORPO.DO30_PROGRIGA = DECODE_INDST1.DO36_PROGRIGA 
-
-        ---- Localizzazione DIBA (Filtra solo le righe rilocabili, Modifica BM: 01/08/2024)
-        --INNER JOIN dbo.RT17_DIBALOCALIZZATA AS LOCALIZZATA WITH (NOLOCK) 
-        --    ON CORPO.DO30_GUID = LOCALIZZATA.RT17_GUID
                          
         -- Politica sulla riga
         LEFT OUTER JOIN dbo.RT00_TEMP_DADI_POLITICA AS POLITICA WITH (NOLOCK)
@@ -122,13 +120,16 @@ FROM        dbo.DO11_DOCTESTATA AS TESTATA WITH (NOLOCK)
             AND POLITICA.RT00_OPZIONE = POLITICA_DIBA.RT00_OPZIONE_MG58
 
         -- Rev.4: Aggancio configurazione tecnica MINMAX INOX basata sulla lunghezza assoluta delle opzioni.
-        -- Estrae ed isola la stringa numerica tra 'L' e il primo '-' trasformandola in intero.
-        -- La clausola è verificata se la lunghezza censita in configurazione (_MP) è Maggiore o Uguale (>=) a quella del documento.
+        -- [PROPOSTA DI OTTIMIZZAZIONE]: Esecuzione di CROSS APPLY per precalcolare TRY_CAST e rimuoverlo dalla LEFT JOIN successiva
+        CROSS APPLY (
+            SELECT ValoreNumericoOpzione = TRY_CAST(SUBSTRING(CORPO.DO30_OPZIONE_MG5E, 2, CHARINDEX('-', CORPO.DO30_OPZIONE_MG5E + '-') - 2) AS INT)
+        ) AS ExtrOpzione
+
         LEFT OUTER JOIN dbo.RT00_CONFTEC_MINMAX_INOX AS INOX WITH (NOLOCK)
             ON  CORPO.DO30_DITTA_CG18 = INOX.RT00_DITTA_CG18
             AND CORPO.DO30_CODART_MG66 = INOX.RT00_CODART_MG66_PF
-            AND TRY_CAST(SUBSTRING(INOX.RT00_OPZIONE_MG58_MP, 2, CHARINDEX('-', INOX.RT00_OPZIONE_MG58_MP + '-') - 2) AS INT) >= 
-                TRY_CAST(SUBSTRING(CORPO.DO30_OPZIONE_MG5E, 2, CHARINDEX('-', CORPO.DO30_OPZIONE_MG5E + '-') - 2) AS INT)
+            -- L'indice sulla colonna calcolata migliora nettamente le performance
+            AND TRY_CAST(SUBSTRING(INOX.RT00_OPZIONE_MG58_MP, 2, CHARINDEX('-', INOX.RT00_OPZIONE_MG58_MP + '-') - 2) AS INT) >= ExtrOpzione.ValoreNumericoOpzione
 
         -- Progressivi di magazzino filtrati per l'anno corrente (0), tipo progressivo (1), tipo quantità (1) e giacenza attuale positiva (> 0)
         LEFT OUTER JOIN dbo.MG70_MAGPROQTA AS MAG WITH (NOLOCK)
@@ -139,15 +140,15 @@ FROM        dbo.DO11_DOCTESTATA AS TESTATA WITH (NOLOCK)
             AND MAG.MG70_TIPOPROG = 1
             AND MAG.MG70_TIPOQTA = 1
             AND MAG.MG70_QGIACATT > 0
-
+			
 WHERE       (TESTATA.DO11_TIPODOC = 21) 
         AND (TESTATA.DO11_STIPODOC = 1) 
+		AND (TESTATA.DO11_DOCUM_MG36 <> 'DC-ORDINE-PPP')
         AND (CORPO.DO30_INDTIPORIGA = 0) 
         AND (CORPO.DO30_INDTIPODATI = 0) 
         AND (ANAGRART.MG66_INDFITTIZIO = 0) 
         AND (CORPOSTATO.DO72_FLGDAEVADERE = 1) 
-        --AND (STATI.CO4H_IDSTATO_CO4C IN (10046, 10054, 10055)) 
-        
+        AND (STATI.CO4H_IDSTATO_CO4C IN (10046, 10054, 10055))
         -- Filtro estrazione basato su Politiche Standard OPPURE su presenza regole MINMAX INOX con Giacenza
         AND (
                 -- Condizione Stock 1: Articolo principale gestito a Stock con batch number valorizzato
@@ -160,18 +161,19 @@ WHERE       (TESTATA.DO11_TIPODOC = 21)
                     AND (ISNULL(POLITICA.RT00_POLITICA, '') = 'Stock')              
                 )
                 OR
-                -- Nuova Funzionalità (Rev.3 / Rev.4 / Rev.5): Match su Configurazione Tecnica Inox E contemporanea giacenza reale a magazzino ed esclusione articoli con Stock + lavorazione
+                -- Nuova Funzionalità (Rev.3 / Rev.4 / Rev.5): Match su Configurazione Tecnica Inox E contemporanea giacenza reale a magazzino
                 (
                         INOX.RT00_CODART_MG66_PF IS NOT NULL
                     AND MAG.MG70_CODART_MG66 IS NOT NULL
-					AND DO05_DESCRIZIONE not like '%lavorazion%'
+                    -- [PROPOSTA DI OTTIMIZZAZIONE]: Sostituita la ricerca text-based e l'ISNULL con un costrutto interamente SARGable.
+                    -- Usa il codice (4) garantendo la massima velocità di Index Seek.
+                    AND (DECODE_INDST1.DO36_INDST1 <> 4 )
                 )
             )
 
         -- Esclusione righe con extralavorazioni che modificano il ciclo (Modifiche BM: 17/10/2025 e 13/01/2026)
         AND dbo.SPRT_EXTRALAV_SINO(CORPO.DO30_DITTA_CG18, CORPO.DO30_NUMREG_CO99, CORPO.DO30_PROGRIGA) = 0
-		--and DO11_NUMREG_CO99 = '202600174089'
-		--and corpo.do30_progriga = 20
+
 ORDER BY corpo.do30_progriga, CORPO.DO30_CODART_MG66, CORPO.DO30_OPZIONE_MG5E
 GO
 
