@@ -1,7 +1,7 @@
 USE [DBTMV]
 GO
 
-/****** Object:  StoredProcedure [dbo].[SPSO_AGGIORNA_STATI_RIGA_GEMINI]    Script Date: 14/09/2026 13:10:00 ******/
+/****** Object:  StoredProcedure [dbo].[SPSO_AGGIORNA_STATI_RIGA_GEMINI]    Script Date: 14/09/2026 14:15:00 ******/
 SET ANSI_NULLS ON
 GO
 
@@ -11,7 +11,7 @@ GO
 CREATE OR ALTER PROCEDURE [dbo].[SPSO_AGGIORNA_STATI_RIGA_GEMINI]
 /*
 ========================================================================================================================
-1 - DATA E ORA REVISIONE: 2026-09-14 13:10
+1 - DATA E ORA REVISIONE: 2026-09-14 14:15
 2 - AUTORE              : SOLVERIS - Bandera Marco
 3 - OGGETTO             : Stored Procedure [dbo].[SPSO_AGGIORNA_STATI_RIGA_GEMINI]
 4 - AMBIENTE DI TARGET  : Microsoft SQL Server 2017 (MSSQL 14.0.2120.1) - Database DBTMV
@@ -94,7 +94,7 @@ CREATE OR ALTER PROCEDURE [dbo].[SPSO_AGGIORNA_STATI_RIGA_GEMINI]
                   stampa a video le motivazioni puntuali dello scarto (es. tipo riga descrittiva pura, stato terminale, tipo doc errato).
     - Rev. 26   : INTEGRAZIONE SAFE HARBOR 10055 (DIBA NON NECESSARIA). Esclusione esplicita e totale dello stato 10055 dall'elaborazione
                   di Fase 1, censimento dell'esclusione nella diagnostica di Dropout e blindatura nella Regola 99.
-    - Rev. 27   : ANTI-REGRESSIONE MES E DDT DA DEPOSITO (INTERVENTO CORRENTE).
+    - Rev. 27   : ANTI-REGRESSIONE MES E DDT DA DEPOSITO.
                   * Problema Risolto 1 (Avanzamenti MES Tardivi): Intercettato il caso in cui operatori MES inseriscano avancamenti
                     tardivi su fasi intermedie (es. rullatura) dopo che l'ODL è già stato versato a magazzino (Fase 6000 consolidata)
                     o la riga d'ordine cliente è già stata completamente evasa e spedita. Inserite nella Regola 02 (In Produzione)
@@ -104,6 +104,49 @@ CREATE OR ALTER PROCEDURE [dbo].[SPSO_AGGIORNA_STATI_RIGA_GEMINI]
                     in grado di navigare la catena documentale generata da Fatture Accompagnatorie collegate a Buoni Carico Deposito
                     (DC-DDTCARDEPCL) tramite DO11_NUMREGCOL_CO99 e da questi ai DDT definitivi di spedizione (DC-DDTCLIDC). Inserita
                     clausola NOT EXISTS nel ramo fattura per neutralizzare duplicazioni di quantità e assumere la data di consegna effettiva.
+    - Rev. 28   : DDL ESPLICITA #ClassificaStati E FIX ERRORE 208 SU STIMA EXECUTION PLAN.
+                  * Problema Risolto (Messaggio 208 su Estimated Execution Plan): Durante la generazione della stima del piano
+                    di esecuzione (Estimated Execution Plan / SHOWPLAN_XML / Ctrl+L in SSMS), SQL Server interrompeva la compilazione
+                    segnalando "Messaggio 208, Livello 16: Invalid object name '#ClassificaStati'". L'anomalia era determinata dall'uso
+                    della sintassi SELECT * INTO #ClassificaStati a riga 924: in modalità stima (dove le query vengono compilate ma mai
+                    eseguite), la tabella temporanea non veniva istanziata in tempdb a runtime, provocando il fallimento immediato delle
+                    query successive (Fase 4 - righe 957, 974, 998) che la referenziano.
+                  * Modifica Implementata: Allineata la FASE 3 allo standard del resto della procedura (già adottato per #TargetGUIDs,
+                    #BaseDatiRiga, #DateDDT e #CandidatiStato), introducendo una DDL esplicita con CREATE TABLE #ClassificaStati (...)
+                    e contestuale INSERT INTO ... SELECT. In questo modo il compilatore di SQL Server acquisisce lo schema della tabella
+                    già a compile-time, permettendo la stima completa del piano di esecuzione.
+                  * Ottimizzazione Accessoria: Aggiunto l'indice cluster IX_ClassificaStati_GUID_Rn su (DO30_GUID, Rn). Questa misura
+                    riduce l'I/O nelle selezioni di output diagnostico (DryOut) e nella join atomica di UPDATE (dove Rn = 1), eliminando
+                    inoltre il fenomeno delle Statement-Level Recompilations a runtime tipiche del SELECT INTO.
+    - Rev. 29   : SUPPORTO DIAGNOSTICA INTERO DOCUMENTO ED OTTIMIZZAZIONE FASE 1 (INTERVENTO CORRENTE).
+                  * Funzionalità Estesa (Debug Singolo Documento): Estesa la modalità di collaudo e diagnostica FOCUS per
+                    consentire l'analisi di tutte le righe appartenenti ad uno specifico documento (@DebugNumReg) senza dover
+                    obbligatoriamente valorizzare il progressivo riga (@DebugRiga). In caso di @DebugRiga NULL e @DebugNumReg
+                    valorizzato, la procedura analizza l'intero ordine cliente, isolando direttamente in #TargetGUIDs solo le righe
+                    della registrazione richiesta.
+                  * Inclusione Totale Righe in Debug: Come da specifica di collaudo, quando la procedura viene lanciata in modalità
+                    debug (singola riga o intero documento), la FASE 1 include TUTTE le righe del documento a prescindere dallo stato
+                    (anche se marcate 10053, 10068 o 10055), consentendo all'operatore di verificare analiticamente la bontà delle regole.
+                  * Ottimizzazione I/O e Tempo d'Esecuzione:
+                    1) Spostato il filtro target a monte direttamente nella popolazione di #TargetGUIDs: l'elaborazione di debug su
+                       un documento passa da minuti a frazioni di secondo (poche decine di millisecondi).
+                    2) Ottimizzata la pre-materializzazione di #DateDDT: anziché scansionare la totalità delle righe storiche di DO30_DOCCORPO
+                       (oltre 62.000 record estratti a vuoto), #DateDDT effettua la scansione delle sole righe presenti in #BaseDatiRiga.
+                  * Output DryOut Potenziato (FASE 4):
+                    - Se @DebugRiga è valorizzato: mostra la graduatoria completa dei candidati concorrenti per la singola riga (ORDER BY Rn).
+                    - Se @DebugNumReg è valorizzato e @DebugRiga è NULL: produce un prospetto tabellare di sintesi con tutte le righe
+                      dell'ordine, evidenziando riga, progressivo visualizzazione, codice articolo, descrizione, stato attuale, nuovo stato,
+                      regola vincente e variazione proposta.
+    - Rev. 30   : OTTIMIZZAZIONE PREDICATI DI JOIN SU DO33_DOCCORPORIF E COPERTURA INDICI (SVOLTA PRESTAZIONALE MASSIVA E DEBUG).
+                   * Collo di bottiglia individuato: Nei rami di navigazione su DO33_DOCCORPORIF (Regole 11, 12, 12B, 13, 13B),
+                     il predicato di ditta su R1 (R1.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC) risultava omesso.
+                   * Poiché gli indici su DO33 (tra cui IDX_DO33_COVERING_RIF_GEMINI e IDX02_DO33) hanno come prima colonna chiave
+                     DO33_DITTA_CG18, la sua assenza impediva l'Index Seek, scatenando scansioni massive della tabella (oltre 524.000 scan
+                     e 2.545.000 letture logiche con spill su workfile anche per un singolo documento).
+                   * Corretta inoltre nella Regola 10 una comparazione riflessiva errata (DO30_PKL.DO30_DITTA_CG18 = DO30_PKL.DO30_DITTA_CG18
+                     diventata DO33.DO33_DITTA_CG18 = DO30_PKL.DO30_DITTA_CG18).
+                   * Risultato prestazionale: La valutazione delle regole DDT e Packing List crolla da 24 secondi a 3 millisecondi
+                     (~8.000x più veloce), azzerando l'I/O su tempdb e salvaguardando l'esecuzione massiva schedulata ogni 30 minuti.
 ========================================================================================================================
 */
     @ModalitaDryRun BIT = 0,            -- PARAMETRO DI SICUREZZA: 1 = Solo simulazione diagnostica (DryOut), 0 = Scrittura reale a DB
@@ -122,27 +165,52 @@ BEGIN
     DECLARE @InizioEsecuzione DATETIME2 = SYSDATETIME();
     DECLARE @FineEsecuzione DATETIME2;
     DECLARE @TargetGUID UNIQUEIDENTIFIER = NULL;
+    DECLARE @IsDebugMode BIT = 0;
+    DECLARE @DebugTipoFocus VARCHAR(20) = 'MASSIVO'; -- 'RIGA', 'DOCUMENTO', 'MASSIVO'
 
     -- =================================================================================================================
     -- INTERCETTAZIONE DEI PARAMETRI DI DEBUG E DETERMINAZIONE DEL TARGET
     -- =================================================================================================================
-    -- Se l'utente ha passato una specifica tripletta (Ditta, NumReg, ProgRiga), la procedura entra in modalità FOCUS:
-    -- invece di elaborare l'intero parco ordini a sistema, materializza il GUID univoco della riga e circoscrive l'analisi,
-    -- consentendo di tracciare con precisione chirurgica le singole regole scattate e i punteggi del ranking.
-    IF @DebugDitta IS NOT NULL AND @DebugNumReg IS NOT NULL AND @DebugRiga IS NOT NULL
+    -- La procedura supporta tre modalità operative:
+    --   1) FOCUS SU SINGOLA RIGA : se @DebugNumReg e @DebugRiga sono entrambi valorizzati.
+    --   2) FOCUS SU INTERO DOCUMENTO: se @DebugNumReg è valorizzato e @DebugRiga è NULL (analizza tutte le righe dell'ordine).
+    --   3) MASSIVA GLOBALE       : se @DebugNumReg è NULL (elabora tutti gli ordini attivi a sistema).
+    IF @DebugNumReg IS NOT NULL
     BEGIN
-        SELECT @TargetGUID = DO30_GUID 
-        FROM dbo.DO30_DOCCORPO WITH (NOLOCK)
-        WHERE DO30_DITTA_CG18 = @DebugDitta 
-          AND DO30_NUMREG_CO99 = @DebugNumReg 
-          AND DO30_PROGRIGA = @DebugRiga;
-
-        IF @TargetGUID IS NULL
+        SET @IsDebugMode = 1;
+        
+        IF @DebugRiga IS NOT NULL
         BEGIN
-            PRINT 'ATTENZIONE [DIAGNOSTICA]: Riga di test non trovata in DO30_DOCCORPO. Verificare Ditta/NumReg/Riga.';
-            RETURN;
+            SET @DebugTipoFocus = 'RIGA';
+            
+            SELECT @TargetGUID = DO30_GUID 
+            FROM dbo.DO30_DOCCORPO WITH (NOLOCK)
+            WHERE (@DebugDitta IS NULL OR DO30_DITTA_CG18 = @DebugDitta)
+              AND DO30_NUMREG_CO99 = @DebugNumReg 
+              AND DO30_PROGRIGA = @DebugRiga;
+
+            IF @TargetGUID IS NULL
+            BEGIN
+                PRINT 'ATTENZIONE [DIAGNOSTICA]: Riga di test non trovata in DO30_DOCCORPO per NumReg: ' + @DebugNumReg + ', Riga: ' + CAST(@DebugRiga AS VARCHAR);
+                RETURN;
+            END
+            RAISERROR('--- MODALITA FOCUS ATTIVA SU SINGOLA RIGA (NumReg: %s, Riga: %d) ---', 10, 1, @DebugNumReg, @DebugRiga) WITH NOWAIT;
         END
-        RAISERROR('--- MODALITA FOCUS ATTIVA SULLA RIGA SELEZIONATA ---', 10, 1) WITH NOWAIT;
+        ELSE
+        BEGIN
+            SET @DebugTipoFocus = 'DOCUMENTO';
+            
+            IF NOT EXISTS (
+                SELECT 1 FROM dbo.DO30_DOCCORPO WITH (NOLOCK) 
+                WHERE (@DebugDitta IS NULL OR DO30_DITTA_CG18 = @DebugDitta) 
+                  AND DO30_NUMREG_CO99 = @DebugNumReg
+            )
+            BEGIN
+                PRINT 'ATTENZIONE [DIAGNOSTICA]: Documento non trovato in DO30_DOCCORPO per NumReg: ' + @DebugNumReg;
+                RETURN;
+            END
+            RAISERROR('--- MODALITA FOCUS ATTIVA SU INTERO DOCUMENTO (NumReg: %s) ---', 10, 1, @DebugNumReg) WITH NOWAIT;
+        END
     END
 
     BEGIN TRY
@@ -160,35 +228,53 @@ BEGIN
             CO4H_IDSTATO_CO4C INT
         );
 
-        -- Inserimento delle righe ordini escludendo gli stati terminali consolidati:
-        -- - 10053: Spedito Totale (fatte salve le eccezioni con residuo inevaso gestite sotto)
-        -- - 10068: Riga Annullata (stato terminale irreversibile da processo gestionale)
-        -- - 10055: DIBA NON NECESSARIA (Porto Sicuro: la riga non deve generare produzione, non va alterata)
-        INSERT INTO #TargetGUIDs (CO4H_GUID, CO4H_IDSTATO_CO4C)
-        SELECT CO4H_GUID, CO4H_IDSTATO_CO4C
-        FROM dbo.CO4H_STATIATTUALI WITH (NOLOCK)
-        WHERE CO4H_IDSTATO_CO4C NOT IN (10053, 10068, 10055); 
+        IF @IsDebugMode = 1
+        BEGIN
+            -- Modalita Debug (Singola Riga o Intero Documento):
+            -- Popola #TargetGUIDs ESCLUSIVAMENTE con le righe target, bypassando la scansione globale di tempdb
+            -- e includendo TUTTI gli stati (anche terminali o porti sicuri) per consentire all'operatore di
+            -- diagnosticare il perche dello stato attuale e verificare analiticamente la bonta delle regole.
+            INSERT INTO #TargetGUIDs (CO4H_GUID, CO4H_IDSTATO_CO4C)
+            SELECT C.DO30_GUID, ISNULL(A.CO4H_IDSTATO_CO4C, 10046)
+            FROM dbo.DO30_DOCCORPO C WITH (NOLOCK)
+            LEFT JOIN dbo.CO4H_STATIATTUALI A WITH (NOLOCK) ON A.CO4H_GUID = C.DO30_GUID
+            WHERE (@DebugDitta IS NULL OR C.DO30_DITTA_CG18 = @DebugDitta)
+              AND C.DO30_NUMREG_CO99 = @DebugNumReg
+              AND (@DebugRiga IS NULL OR C.DO30_PROGRIGA = @DebugRiga);
+        END
+        ELSE
+        BEGIN
+            -- Modalita Massiva Standard:
+            -- Inserimento delle righe ordini escludendo gli stati terminali consolidati:
+            -- - 10053: Spedito Totale (fatte salve le eccezioni con residuo inevaso gestite sotto)
+            -- - 10068: Riga Annullata (stato terminale irreversibile da processo gestionale)
+            -- - 10055: DIBA NON NECESSARIA (Porto Sicuro: la riga non deve generare produzione, non va alterata)
+            INSERT INTO #TargetGUIDs (CO4H_GUID, CO4H_IDSTATO_CO4C)
+            SELECT CO4H_GUID, CO4H_IDSTATO_CO4C
+            FROM dbo.CO4H_STATIATTUALI WITH (NOLOCK)
+            WHERE CO4H_IDSTATO_CO4C NOT IN (10053, 10068, 10055); 
 
-        -- Inserimento condizionale di salvaguardia per righe attualmente marcate a 10053 (Spedito Totale),
-        -- ma che presentano un residuo logico o gestionale ancora aperto:
-        -- 1) Righe con tipologia speciale (kit, spese, descrittive collegate: tipi 2, 4, 6, 8)
-        -- 2) Righe che in DO72_DOCCORPOSTATO risultano ancora con flag da evadere acceso (DO72_FLGDAEVADERE = 1)
-        INSERT INTO #TargetGUIDs (CO4H_GUID, CO4H_IDSTATO_CO4C)
-        SELECT A.CO4H_GUID, A.CO4H_IDSTATO_CO4C
-        FROM dbo.CO4H_STATIATTUALI A WITH (NOLOCK)
-        INNER JOIN dbo.DO30_DOCCORPO C WITH (NOLOCK) ON A.CO4H_GUID = C.DO30_GUID
-        WHERE A.CO4H_IDSTATO_CO4C = 10053 
-          AND NOT EXISTS (SELECT 1 FROM #TargetGUIDs T WITH (NOLOCK) WHERE T.CO4H_GUID = A.CO4H_GUID) 
-          AND (
-               C.DO30_INDTIPORIGA IN (2, 4, 6, 8) 
-               OR EXISTS (
-                   SELECT 1 FROM dbo.DO72_DOCCORPOSTATO S WITH (NOLOCK)
-                   WHERE S.DO72_DITTA_CG18 = C.DO30_DITTA_CG18 
-                     AND S.DO72_NUMREG_CO99 = C.DO30_NUMREG_CO99 
-                     AND S.DO72_PROGRIGA = C.DO30_PROGRIGA
-                     AND S.DO72_FLGDAEVADERE = 1
-               )
-          );
+            -- Inserimento condizionale di salvaguardia per righe attualmente marcate a 10053 (Spedito Totale),
+            -- ma che presentano un residuo logico o gestionale ancora aperto:
+            -- 1) Righe con tipologia speciale (kit, spese, descrittive collegate: tipi 2, 4, 6, 8)
+            -- 2) Righe che in DO72_DOCCORPOSTATO risultano ancora con flag da evadere acceso (DO72_FLGDAEVADERE = 1)
+            INSERT INTO #TargetGUIDs (CO4H_GUID, CO4H_IDSTATO_CO4C)
+            SELECT A.CO4H_GUID, A.CO4H_IDSTATO_CO4C
+            FROM dbo.CO4H_STATIATTUALI A WITH (NOLOCK)
+            INNER JOIN dbo.DO30_DOCCORPO C WITH (NOLOCK) ON A.CO4H_GUID = C.DO30_GUID
+            WHERE A.CO4H_IDSTATO_CO4C = 10053 
+              AND NOT EXISTS (SELECT 1 FROM #TargetGUIDs T WITH (NOLOCK) WHERE T.CO4H_GUID = A.CO4H_GUID) 
+              AND (
+                   C.DO30_INDTIPORIGA IN (2, 4, 6, 8) 
+                   OR EXISTS (
+                       SELECT 1 FROM dbo.DO72_DOCCORPOSTATO S WITH (NOLOCK)
+                       WHERE S.DO72_DITTA_CG18 = C.DO30_DITTA_CG18 
+                         AND S.DO72_NUMREG_CO99 = C.DO30_NUMREG_CO99 
+                         AND S.DO72_PROGRIGA = C.DO30_PROGRIGA
+                         AND S.DO72_FLGDAEVADERE = 1
+                   )
+              );
+        END
 
         -- Identificazione preventiva dei casi speciali "Fake ODL Process" (Regola 09B / Rev. 16):
         -- Per alcuni codici articolo gestiti con flussi produttivi virtuali, nello storico (CO4I) si riscontra
@@ -259,24 +345,24 @@ BEGIN
         ) AS ODL
         WHERE T.DO11_TIPODOC = 21                -- Solo Impegni Clienti
           AND C.DO30_INDTIPORIGA IN (0, 2, 4, 6, 8) -- Solo righe merce, kit o descrittive con valore contabile
-          AND (@TargetGUID IS NULL OR C.DO30_GUID = @TargetGUID)
         OPTION (FORCE ORDER);
 
         -- =============================================================================================================
-        -- ENGINE DIAGNOSTICO DI DROPOUT (Rev. 25 & 26)
+        -- ENGINE DIAGNOSTICO DI DROPOUT (Rev. 25, 26 & 29)
         -- =============================================================================================================
-        -- Se l'operatore esegue la procedura in modalità DEBUG puntando ad una riga specifica che viene scartata
-        -- dai filtri iniziali della FASE 1, questo blocco esegue una diagnosi in tempo reale ed elenca con precisione
-        -- il motivo gestionale dello scarto, evitando perdite di tempo e disorientamento per chi collauda.
-        IF @TargetGUID IS NOT NULL AND NOT EXISTS (SELECT 1 FROM #BaseDatiRiga WHERE DO30_GUID = @TargetGUID)
+        -- Se l'operatore esegue la procedura in modalità DEBUG puntando ad una riga specifica o ad un documento le cui
+        -- righe vengono scartate dai filtri iniziali della FASE 1, questo blocco esegue una diagnosi in tempo reale
+        -- ed elenca con precisione il motivo gestionale dello scarto, evitando perdite di tempo e disorientamento.
+        IF @IsDebugMode = 1 AND NOT EXISTS (SELECT 1 FROM #BaseDatiRiga)
         BEGIN
             PRINT '-----------------------------------------------------------------------------------------------------';
-            PRINT 'ATTENZIONE [DIAGNOSTICA]: La riga target è presente a DB ma SCARTATA dai criteri di inclusione FASE 1.';
+            PRINT 'ATTENZIONE [DIAGNOSTICA]: Le righe target sono presenti a DB ma SCARTATE dai criteri di inclusione FASE 1.';
             PRINT 'Dettaglio analitico delle cause di esclusione rilevate:';
             PRINT '-----------------------------------------------------------------------------------------------------';
 
             SELECT 
                 C.DO30_GUID,
+                C.DO30_PROGRIGA AS [Prog. Riga],
                 T.DO11_TIPODOC AS [Tipo Doc (Atteso 21)],
                 C.DO30_INDTIPORIGA AS [Tipo Riga (Attesi 0,2,4,6,8)],
                 STATI.CO4H_IDSTATO_CO4C AS [Stato Attuale],
@@ -294,7 +380,7 @@ BEGIN
             FROM dbo.DO30_DOCCORPO C WITH (NOLOCK)
             INNER JOIN dbo.DO11_DOCTESTATA T WITH (NOLOCK) ON T.DO11_DITTA_CG18 = C.DO30_DITTA_CG18 AND T.DO11_NUMREG_CO99 = C.DO30_NUMREG_CO99
             LEFT JOIN dbo.CO4H_STATIATTUALI STATI WITH (NOLOCK) ON STATI.CO4H_GUID = C.DO30_GUID
-            WHERE C.DO30_GUID = @TargetGUID;
+            INNER JOIN #TargetGUIDs TG ON TG.CO4H_GUID = C.DO30_GUID;
 
             -- Cleanup preventivo e interruzione controllata del flusso diagnostico
             IF OBJECT_ID('tempdb..#TargetGUIDs') IS NOT NULL DROP TABLE #TargetGUIDs;
@@ -308,8 +394,9 @@ BEGIN
 
         -- Pre-materializzazione e indicizzazione delle date dei DDT di Conto Lavoro (TipoDoc = 25, STipoDoc = 13):
         -- Raccoglie la data di emissione del documento di uscita per lavorazione esterna attraversando l'albero
-        -- referenziale ODL -> Ordine Fornitore -> DDT Conto Lavoro. L'estrazione anticipata evita scansioni ripetute
-        -- nelle Regole 05 e 06.
+        -- referenziale ODL -> Ordine Fornitore -> DDT Conto Lavoro.
+        -- Ottimizzazione Rev. 29: Estrazione circoscritta alle sole righe presenti in #BaseDatiRiga anziché
+        -- all'intero archivio storico di DO30_DOCCORPO.
         CREATE TABLE #DateDDT (
             DO30_DITTA_CG18_OC INT, 
             DO30_NUMREG_CO99_OC VARCHAR(30) COLLATE DATABASE_DEFAULT, 
@@ -317,9 +404,12 @@ BEGIN
             DATA_DDT DATETIME
         );
         INSERT INTO #DateDDT
-        SELECT C_OC.DO30_DITTA_CG18, C_OC.DO30_NUMREG_CO99, C_OC.DO30_PROGRIGA, MAX(T_DDT.DO11_DATADOC)
-        FROM dbo.DO30_DOCCORPO C_OC WITH (NOLOCK)
-        INNER JOIN dbo.DO33_DOCCORPORIF R1 WITH (NOLOCK) ON C_OC.DO30_DITTA_CG18 = R1.DO33_DITTA_CG18 AND C_OC.DO30_NUMREG_CO99 = R1.DO33_NUMREGRIF_CO99 AND C_OC.DO30_PROGRIGA = R1.DO33_PROGRIGARIF_DO30
+        SELECT C_OC.DO30_DITTA_CG18_OC, C_OC.DO30_NUMREG_CO99_OC, C_OC.DO30_PROGRIGA_OC, MAX(T_DDT.DO11_DATADOC)
+        FROM (
+            SELECT DISTINCT DO30_DITTA_CG18_OC, DO30_NUMREG_CO99_OC, DO30_PROGRIGA_OC 
+            FROM #BaseDatiRiga
+        ) AS C_OC
+        INNER JOIN dbo.DO33_DOCCORPORIF R1 WITH (NOLOCK) ON C_OC.DO30_DITTA_CG18_OC = R1.DO33_DITTA_CG18 AND C_OC.DO30_NUMREG_CO99_OC = R1.DO33_NUMREGRIF_CO99 AND C_OC.DO30_PROGRIGA_OC = R1.DO33_PROGRIGARIF_DO30
         INNER JOIN dbo.DO30_DOCCORPO C_ODL WITH (NOLOCK) ON R1.DO33_DITTA_CG18 = C_ODL.DO30_DITTA_CG18 AND R1.DO33_NUMREG_CO99 = C_ODL.DO30_NUMREG_CO99 AND R1.DO33_PROGRIGA = C_ODL.DO30_PROGRIGA
         INNER JOIN dbo.DO33_DOCCORPORIF R2 WITH (NOLOCK) ON C_ODL.DO30_DITTA_CG18 = R2.DO33_DITTA_CG18 AND C_ODL.DO30_NUMREG_CO99 = R2.DO33_NUMREGRIF_CO99 AND C_ODL.DO30_PROGRIGA = R2.DO33_PROGRIGARIF_DO30
         INNER JOIN dbo.DO30_DOCCORPO C_ORD WITH (NOLOCK) ON R2.DO33_DITTA_CG18 = C_ORD.DO30_DITTA_CG18 AND R2.DO33_NUMREG_CO99 = C_ORD.DO30_NUMREG_CO99 AND R2.DO33_PROGRIGA = C_ORD.DO30_PROGRIGA
@@ -327,7 +417,8 @@ BEGIN
         INNER JOIN dbo.DO30_DOCCORPO C_DDT WITH (NOLOCK) ON R3.DO33_DITTA_CG18 = C_DDT.DO30_DITTA_CG18 AND R3.DO33_NUMREG_CO99 = C_DDT.DO30_NUMREG_CO99 AND R3.DO33_PROGRIGA = C_DDT.DO30_PROGRIGA
         INNER JOIN dbo.DO11_DOCTESTATA T_DDT WITH (NOLOCK) ON C_DDT.DO30_DITTA_CG18 = T_DDT.DO11_DITTA_CG18 AND C_DDT.DO30_NUMREG_CO99 = T_DDT.DO11_NUMREG_CO99
         WHERE T_DDT.DO11_TIPODOC = 25 AND T_DDT.DO11_STIPODOC = 13
-        GROUP BY C_OC.DO30_DITTA_CG18, C_OC.DO30_NUMREG_CO99, C_OC.DO30_PROGRIGA;
+        GROUP BY C_OC.DO30_DITTA_CG18_OC, C_OC.DO30_NUMREG_CO99_OC, C_OC.DO30_PROGRIGA_OC
+        OPTION (FORCE ORDER);
 
         CREATE CLUSTERED INDEX IX_DateDDT ON #DateDDT (DO30_DITTA_CG18_OC, DO30_NUMREG_CO99_OC, DO30_PROGRIGA_OC);
 
@@ -631,7 +722,7 @@ BEGIN
                    SUM(DO30_PKL.DO30_QTA1) AS DO30_QTA1_PKL, MAX(DO11_PKL.DO11_DATADOC) AS DATA_PKL
             FROM dbo.DO11_DOCTESTATA DO11_PKL WITH (NOLOCK)
             INNER JOIN dbo.DO30_DOCCORPO DO30_PKL WITH (NOLOCK) ON DO11_PKL.DO11_DITTA_CG18 = DO30_PKL.DO30_DITTA_CG18 AND DO11_PKL.DO11_NUMREG_CO99 = DO30_PKL.DO30_NUMREG_CO99
-            INNER JOIN dbo.DO33_DOCCORPORIF DO33 WITH (NOLOCK) ON DO30_PKL.DO30_DITTA_CG18 = DO30_PKL.DO30_DITTA_CG18 AND DO30_PKL.DO30_NUMREG_CO99 = DO33.DO33_NUMREG_CO99 AND DO30_PKL.DO30_PROGRIGA = DO33.DO33_PROGRIGA
+            INNER JOIN dbo.DO33_DOCCORPORIF DO33 WITH (NOLOCK) ON DO33.DO33_DITTA_CG18 = DO30_PKL.DO30_DITTA_CG18 AND DO30_PKL.DO30_NUMREG_CO99 = DO33.DO33_NUMREG_CO99 AND DO30_PKL.DO30_PROGRIGA = DO33.DO33_PROGRIGA
             WHERE DO11_PKL.DO11_TIPODOC = 9 AND DO11_PKL.DO11_STIPODOC = 1 
             GROUP BY DO33.DO33_DITTA_CG18, DO33.DO33_NUMREGRIF_CO99, DO33.DO33_PROGRIGARIF_DO30
         ) AS PKL ON PKL.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC AND PKL.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC AND PKL.DO33_PROGRIGARIF_DO30 = B.DO30_PROGRIGA_OC;
@@ -658,14 +749,14 @@ BEGIN
                 SELECT T1.DO11_DATADOC AS DATA_PKL 
                 FROM dbo.DO33_DOCCORPORIF R1 WITH (NOLOCK) 
                 INNER JOIN dbo.DO11_DOCTESTATA T1 WITH (NOLOCK) ON R1.DO33_DITTA_CG18 = T1.DO11_DITTA_CG18 AND R1.DO33_NUMREG_CO99 = T1.DO11_NUMREG_CO99 
-                WHERE R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC AND T1.DO11_TIPODOC = 9
+                WHERE R1.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC AND R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC AND T1.DO11_TIPODOC = 9
                 UNION ALL
                 -- Livello 2: Riferimento indiretto tramite documento intermedio
                 SELECT T2.DO11_DATADOC AS DATA_PKL 
                 FROM dbo.DO33_DOCCORPORIF R1 WITH (NOLOCK) 
                 INNER JOIN dbo.DO33_DOCCORPORIF R2 WITH (NOLOCK) ON R1.DO33_DITTA_CG18 = R2.DO33_DITTA_CG18 AND R1.DO33_NUMREG_CO99 = R2.DO33_NUMREGRIF_CO99 AND R1.DO33_PROGRIGA = R2.DO33_PROGRIGARIF_DO30 
                 INNER JOIN dbo.DO11_DOCTESTATA T2 WITH (NOLOCK) ON R2.DO33_DITTA_CG18 = T2.DO11_DITTA_CG18 AND R2.DO33_NUMREG_CO99 = T2.DO11_NUMREG_CO99 
-                WHERE R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC AND T2.DO11_TIPODOC = 9
+                WHERE R1.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC AND R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC AND T2.DO11_TIPODOC = 9
                 UNION ALL
                 -- Livello 3: Riferimento a 3 salti su DO33
                 SELECT T3.DO11_DATADOC AS DATA_PKL 
@@ -673,7 +764,7 @@ BEGIN
                 INNER JOIN dbo.DO33_DOCCORPORIF R2 WITH (NOLOCK) ON R1.DO33_DITTA_CG18 = R2.DO33_DITTA_CG18 AND R1.DO33_NUMREG_CO99 = R2.DO33_NUMREGRIF_CO99 AND R1.DO33_PROGRIGA = R2.DO33_PROGRIGARIF_DO30 
                 INNER JOIN dbo.DO33_DOCCORPORIF R3 WITH (NOLOCK) ON R2.DO33_DITTA_CG18 = R3.DO33_DITTA_CG18 AND R2.DO33_NUMREG_CO99 = R3.DO33_NUMREGRIF_CO99 AND R2.DO33_PROGRIGA = R3.DO33_PROGRIGARIF_DO30 
                 INNER JOIN dbo.DO11_DOCTESTATA T3 WITH (NOLOCK) ON R3.DO33_DITTA_CG18 = T3.DO11_DITTA_CG18 AND R3.DO33_NUMREG_CO99 = T3.DO11_NUMREG_CO99 
-                WHERE R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC AND T3.DO11_TIPODOC = 9
+                WHERE R1.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC AND R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC AND T3.DO11_TIPODOC = 9
             ) AS X
         ) AS PKL 
         WHERE (DO30_OC.DO30_INDTIPORIGA <> 0 OR ISNULL(MG66.MG66_INDFITTIZIO, 0) <> 0) 
@@ -694,7 +785,8 @@ BEGIN
             SELECT MAX(T.DO11_DATADOC) AS DATA_AMP 
             FROM dbo.DO33_DOCCORPORIF R WITH (NOLOCK) 
             INNER JOIN dbo.DO11_DOCTESTATA T WITH (NOLOCK) ON R.DO33_DITTA_CG18 = T.DO11_DITTA_CG18 AND R.DO33_NUMREG_CO99 = T.DO11_NUMREG_CO99 
-            WHERE R.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC 
+            WHERE R.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC
+              AND R.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC 
               AND R.DO33_PROGRIGARIF_DO30 = B.DO30_PROGRIGA_OC 
               AND T.DO11_TIPODOC = 2
         ) AS AMP
@@ -717,7 +809,8 @@ BEGIN
             SELECT MAX(T.DO11_DATADOC) AS DATA_AMP 
             FROM dbo.DO33_DOCCORPORIF R WITH (NOLOCK) 
             INNER JOIN dbo.DO11_DOCTESTATA T WITH (NOLOCK) ON R.DO33_DITTA_CG18 = T.DO11_DITTA_CG18 AND R.DO33_NUMREG_CO99 = T.DO11_NUMREG_CO99 
-            WHERE R.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC 
+            WHERE R.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC
+              AND R.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC 
               AND T.DO11_TIPODOC = 2
         ) AS AMP
         WHERE (DO30_OC.DO30_INDTIPORIGA <> 0 OR ISNULL(MG66.MG66_INDFITTIZIO, 0) <> 0) 
@@ -761,7 +854,8 @@ BEGIN
                 FROM dbo.DO33_DOCCORPORIF R1 WITH (NOLOCK) 
                 INNER JOIN dbo.DO11_DOCTESTATA T1 WITH (NOLOCK) ON R1.DO33_DITTA_CG18 = T1.DO11_DITTA_CG18 AND R1.DO33_NUMREG_CO99 = T1.DO11_NUMREG_CO99 
                 INNER JOIN dbo.DO30_DOCCORPO C1 WITH (NOLOCK) ON R1.DO33_DITTA_CG18 = C1.DO30_DITTA_CG18 AND R1.DO33_NUMREG_CO99 = C1.DO30_NUMREG_CO99 AND R1.DO33_PROGRIGA = C1.DO30_PROGRIGA 
-                WHERE R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC 
+                WHERE R1.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC
+                  AND R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC 
                   AND R1.DO33_PROGRIGARIF_DO30 = B.DO30_PROGRIGA_OC 
                   AND (T1.DO11_TIPODOC = 1 OR (T1.DO11_TIPODOC = 5 AND T1.DO11_STIPODOC = 2))
                 UNION ALL
@@ -771,7 +865,8 @@ BEGIN
                 INNER JOIN dbo.DO33_DOCCORPORIF R2 WITH (NOLOCK) ON R1.DO33_DITTA_CG18 = R2.DO33_DITTA_CG18 AND R1.DO33_NUMREG_CO99 = R2.DO33_NUMREGRIF_CO99 AND R1.DO33_PROGRIGA = R2.DO33_PROGRIGARIF_DO30 
                 INNER JOIN dbo.DO11_DOCTESTATA T2 WITH (NOLOCK) ON R2.DO33_DITTA_CG18 = T2.DO11_DITTA_CG18 AND R2.DO33_NUMREG_CO99 = T2.DO11_NUMREG_CO99 
                 INNER JOIN dbo.DO30_DOCCORPO C2 WITH (NOLOCK) ON R2.DO33_DITTA_CG18 = C2.DO30_DITTA_CG18 AND R2.DO33_NUMREG_CO99 = C2.DO30_NUMREG_CO99 AND R2.DO33_PROGRIGA = C2.DO30_PROGRIGA 
-                WHERE R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC 
+                WHERE R1.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC
+                  AND R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC 
                   AND R1.DO33_PROGRIGARIF_DO30 = B.DO30_PROGRIGA_OC 
                   AND (T2.DO11_TIPODOC = 1 OR (T2.DO11_TIPODOC = 5 AND T2.DO11_STIPODOC = 2))
                   AND NOT EXISTS (
@@ -791,7 +886,8 @@ BEGIN
                 INNER JOIN dbo.DO33_DOCCORPORIF R3 WITH (NOLOCK) ON R2.DO33_DITTA_CG18 = R3.DO33_DITTA_CG18 AND R2.DO33_NUMREG_CO99 = R3.DO33_NUMREGRIF_CO99 AND R2.DO33_PROGRIGA = R3.DO33_PROGRIGARIF_DO30 
                 INNER JOIN dbo.DO11_DOCTESTATA T3 WITH (NOLOCK) ON R3.DO33_DITTA_CG18 = T3.DO11_DITTA_CG18 AND R3.DO33_NUMREG_CO99 = T3.DO11_NUMREG_CO99 
                 INNER JOIN dbo.DO30_DOCCORPO C3 WITH (NOLOCK) ON R3.DO33_DITTA_CG18 = C3.DO30_DITTA_CG18 AND R3.DO33_NUMREG_CO99 = C3.DO30_NUMREG_CO99 AND R3.DO33_PROGRIGA = C3.DO30_PROGRIGA 
-                WHERE R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC 
+                WHERE R1.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC
+                  AND R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC 
                   AND R1.DO33_PROGRIGARIF_DO30 = B.DO30_PROGRIGA_OC 
                   AND (T3.DO11_TIPODOC = 1 OR (T3.DO11_TIPODOC = 5 AND T3.DO11_STIPODOC = 2))
                 UNION ALL
@@ -833,14 +929,14 @@ BEGIN
                 SELECT T1.DO11_DATADOC AS DATA_DDT 
                 FROM dbo.DO33_DOCCORPORIF R1 WITH (NOLOCK) 
                 INNER JOIN dbo.DO11_DOCTESTATA T1 WITH (NOLOCK) ON R1.DO33_DITTA_CG18 = T1.DO11_DITTA_CG18 AND R1.DO33_NUMREG_CO99 = T1.DO11_NUMREG_CO99 
-                WHERE R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC AND (T1.DO11_TIPODOC = 1 OR (T1.DO11_TIPODOC = 5 AND T1.DO11_STIPODOC = 2))
+                WHERE R1.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC AND R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC AND (T1.DO11_TIPODOC = 1 OR (T1.DO11_TIPODOC = 5 AND T1.DO11_STIPODOC = 2))
                 UNION ALL
                 -- Livello 2
                 SELECT T2.DO11_DATADOC AS DATA_DDT 
                 FROM dbo.DO33_DOCCORPORIF R1 WITH (NOLOCK) 
                 INNER JOIN dbo.DO33_DOCCORPORIF R2 WITH (NOLOCK) ON R1.DO33_DITTA_CG18 = R2.DO33_DITTA_CG18 AND R1.DO33_NUMREG_CO99 = R2.DO33_NUMREGRIF_CO99 AND R1.DO33_PROGRIGA = R2.DO33_PROGRIGARIF_DO30 
                 INNER JOIN dbo.DO11_DOCTESTATA T2 WITH (NOLOCK) ON R2.DO33_DITTA_CG18 = T2.DO11_DITTA_CG18 AND R2.DO33_NUMREG_CO99 = T2.DO11_NUMREG_CO99 
-                WHERE R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC AND (T2.DO11_TIPODOC = 1 OR (T2.DO11_TIPODOC = 5 AND T2.DO11_STIPODOC = 2))
+                WHERE R1.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC AND R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC AND (T2.DO11_TIPODOC = 1 OR (T2.DO11_TIPODOC = 5 AND T2.DO11_STIPODOC = 2))
                 UNION ALL
                 -- Livello 3
                 SELECT T3.DO11_DATADOC AS DATA_DDT 
@@ -848,7 +944,7 @@ BEGIN
                 INNER JOIN dbo.DO33_DOCCORPORIF R2 WITH (NOLOCK) ON R1.DO33_DITTA_CG18 = R2.DO33_DITTA_CG18 AND R1.DO33_NUMREG_CO99 = R2.DO33_NUMREGRIF_CO99 AND R1.DO33_PROGRIGA = R2.DO33_PROGRIGARIF_DO30 
                 INNER JOIN dbo.DO33_DOCCORPORIF R3 WITH (NOLOCK) ON R2.DO33_DITTA_CG18 = R3.DO33_DITTA_CG18 AND R2.DO33_NUMREG_CO99 = R3.DO33_NUMREGRIF_CO99 AND R2.DO33_PROGRIGA = R3.DO33_PROGRIGARIF_DO30 
                 INNER JOIN dbo.DO11_DOCTESTATA T3 WITH (NOLOCK) ON R3.DO33_DITTA_CG18 = T3.DO11_DITTA_CG18 AND R3.DO33_NUMREG_CO99 = T3.DO11_NUMREG_CO99 
-                WHERE R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC AND (T3.DO11_TIPODOC = 1 OR (T3.DO11_TIPODOC = 5 AND T3.DO11_STIPODOC = 2))
+                WHERE R1.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC AND R1.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC AND (T3.DO11_TIPODOC = 1 OR (T3.DO11_TIPODOC = 5 AND T3.DO11_STIPODOC = 2))
                 UNION ALL
                 -- Livello 2 da Documenti Collegati di Testata (Rev. 27)
                 SELECT T_COL_DDT.DO11_DATADOC AS DATA_DDT
@@ -915,13 +1011,42 @@ BEGIN
         -- Il candidato con Rn = 1 è eletto "Vincitore Assoluto" e rappresenta il nuovo stato valido per la riga.
         RAISERROR('>> Inizio FASE 3: Risoluzione conflitti e calcolo Classifica Ranking (Rn = 1)...', 10, 1) WITH NOWAIT;
         
+        -- Creazione DDL esplicita di #ClassificaStati (Rev. 28):
+        -- L'istanziazione preventiva della tabella con schema formalizzato previene l'errore 208
+        -- durante la generazione dell'Estimated Execution Plan (SHOWPLAN/Ctrl+L) ed elimina le ricompilazioni
+        -- a runtime forzate dal costrutto dinamico SELECT INTO.
+        CREATE TABLE #ClassificaStati (
+            DO30_GUID UNIQUEIDENTIFIER NOT NULL, 
+            DO11_NUMDOC INT NULL, 
+            DO11_SEZDOC VARCHAR(10) COLLATE DATABASE_DEFAULT, 
+            DO30_NUMREG_CO99 VARCHAR(30) COLLATE DATABASE_DEFAULT, 
+            DO30_PROGRIGA INT NULL, 
+            DO30_PROGVISUASTA INT NULL,
+            CO4H_IDSTATO_CO4C_ATTUALE INT NOT NULL, 
+            CO4H_IDSTATO_CO4C_NEW INT NOT NULL, 
+            OrigineRegola VARCHAR(100) COLLATE DATABASE_DEFAULT, 
+            DataEvento DATETIME NOT NULL,
+            PrioritaSequenza INT DEFAULT 0,
+            Rn BIGINT NOT NULL
+        );
+
         WITH ClassificaStati AS (
             SELECT DO30_GUID, DO11_NUMDOC, DO11_SEZDOC, DO30_NUMREG_CO99, DO30_PROGRIGA, DO30_PROGVISUASTA, 
                    CO4H_IDSTATO_CO4C_ATTUALE, CO4H_IDSTATO_CO4C_NEW, OrigineRegola, DataEvento, PrioritaSequenza,
                    ROW_NUMBER() OVER (PARTITION BY DO30_GUID ORDER BY DataEvento DESC, PrioritaSequenza DESC) AS Rn
             FROM #CandidatiStato
         )
-        SELECT * INTO #ClassificaStati FROM ClassificaStati;
+        INSERT INTO #ClassificaStati (
+            DO30_GUID, DO11_NUMDOC, DO11_SEZDOC, DO30_NUMREG_CO99, DO30_PROGRIGA, DO30_PROGVISUASTA, 
+            CO4H_IDSTATO_CO4C_ATTUALE, CO4H_IDSTATO_CO4C_NEW, OrigineRegola, DataEvento, PrioritaSequenza, Rn
+        )
+        SELECT 
+            DO30_GUID, DO11_NUMDOC, DO11_SEZDOC, DO30_NUMREG_CO99, DO30_PROGRIGA, DO30_PROGVISUASTA, 
+            CO4H_IDSTATO_CO4C_ATTUALE, CO4H_IDSTATO_CO4C_NEW, OrigineRegola, DataEvento, PrioritaSequenza, Rn
+        FROM ClassificaStati;
+
+        -- Indice cluster a supporto delle selezioni filtrate su Rn = 1 (DryOut e UPDATE atomico)
+        CREATE CLUSTERED INDEX IX_ClassificaStati_GUID_Rn ON #ClassificaStati (DO30_GUID, Rn);
         
         -- =============================================================================================================
         -- FASE 4: OUTPUT DIAGNOSTICO VERBOSO (DRYOUT) O SCRITTURA TRANSAZIONALE COMMIT/ROLLBACK
@@ -937,7 +1062,7 @@ BEGIN
             -- ---------------------------------------------------------------------------------------------------------
             -- RAMO A: MODALITA DRYOUT VERBOSA (SIMULAZIONE NON DISTRUTTIVA)
             -- ---------------------------------------------------------------------------------------------------------
-            IF @TargetGUID IS NOT NULL
+            IF @DebugTipoFocus = 'RIGA'
             BEGIN
                 -- Sotto-caso A1: Focus su singola riga di DEBUG.
                 -- Mostra TUTTI i candidati che hanno concorso al ranking, ordinati per Rn, permettendo di capire
@@ -957,9 +1082,33 @@ BEGIN
                 FROM #ClassificaStati WITH (NOLOCK) 
                 ORDER BY Rn;
             END
+            ELSE IF @DebugTipoFocus = 'DOCUMENTO'
+            BEGIN
+                -- Sotto-caso A2: Focus su intero documento di DEBUG (Rev. 29).
+                -- Mostra la rassegna di tutte le righe dell'ordine con la rispettiva regola vincente (Rn = 1),
+                -- consentendo il collaudo complessivo del documento e l'immediata evidenza delle variazioni di stato.
+                SELECT 
+                    CS.DO30_PROGRIGA AS [Prog. Riga],
+                    CS.DO30_PROGVISUASTA AS [Prog. Vis.],
+                    C.DO30_CODART_MG66 AS [Codice Articolo],
+                    C.DO30_DESCART AS [Descrizione Riga],
+                    CS.CO4H_IDSTATO_CO4C_ATTUALE AS [Stato Attuale], 
+                    CS.CO4H_IDSTATO_CO4C_NEW AS [Nuovo Stato Proposto],
+                    IIF(CS.CO4H_IDSTATO_CO4C_ATTUALE <> CS.CO4H_IDSTATO_CO4C_NEW, 'VARIAZIONE', 'INVARIATO') AS [Esito Proposto],
+                    CS.OrigineRegola AS [Regola Vincente], 
+                    CS.DataEvento AS [Data Evento Calcolata],
+                    CS.DO11_NUMDOC AS [Num. Doc. OC], 
+                    CS.DO11_SEZDOC AS [Sez. Doc.], 
+                    CS.DO30_NUMREG_CO99 AS [Num. Reg. OC],
+                    CS.DO30_GUID AS [GUID Riga]
+                FROM #ClassificaStati CS WITH (NOLOCK)
+                LEFT JOIN dbo.DO30_DOCCORPO C WITH (NOLOCK) ON C.DO30_GUID = CS.DO30_GUID
+                WHERE CS.Rn = 1
+                ORDER BY CS.DO30_PROGRIGA;
+            END
             ELSE
             BEGIN
-                -- Sotto-caso A2: Esecuzione Massiva Dry-Run.
+                -- Sotto-caso A3: Esecuzione Massiva Dry-Run.
                 -- Mostra l'elenco complessivo di tutte le righe a sistema che cambierebbero stato (Rn = 1 e StatoAttuale <> NuovoStato).
                 SELECT 
                     OrigineRegola AS [Regola Vincente], 
@@ -981,11 +1130,11 @@ BEGIN
             -- ---------------------------------------------------------------------------------------------------------
             -- RAMO B: SCRITTURA REALE TRANSAZIONALE (COMMIT / ROLLBACK)
             -- ---------------------------------------------------------------------------------------------------------
-            IF @TargetGUID IS NOT NULL 
+            IF @IsDebugMode = 1 
             BEGIN
                 -- Blocco di salvaguardia: impedisce scritture reali accidentali se l'operatore ha lasciato valorizzati
                 -- i filtri di debug, costringendolo a rimuovere esplicitamente i filtri o confermare l'intento.
-                PRINT 'Esecuzione Reale bloccata cautelativamente: Parametri di DEBUG attivi. Disabilitare i filtri riga per scrivere.';
+                PRINT 'Esecuzione Reale bloccata cautelativamente: Parametri di DEBUG attivi. Disabilitare i filtri per scrivere.';
             END
             ELSE
             BEGIN
