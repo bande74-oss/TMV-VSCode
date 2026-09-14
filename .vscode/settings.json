@@ -1,0 +1,15 @@
+{
+    "files.associations": {
+        "*.sql": "sql"
+    },
+    "mssql.connections": [
+        {
+            "server": "NB-BANDERA\\SQL2019",
+            "database": "DBTMV",
+            "authenticationType": "Integrated",
+            "profileName": "DBTMV",
+            "savePassword": true
+        }
+    ]
+}
+

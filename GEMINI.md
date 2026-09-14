@@ -4,7 +4,10 @@ Queste regole devono essere applicate automaticamente dall'agente ad ogni operaz
 
 ## 1. Pianificazione e Analisi
 - **Piano di azione:** Prima di scrivere o modificare codice, proponi un piano di azione dettagliato. Fai tutte le domande necessarie per chiarire i requisiti o richiedere elementi mancanti prima di agire (Planning Mode).
-- **Versione SQL:** Assicurati di conoscere la versione di SQL Server in uso. Se non dichiarata, chiedila all'inizio della sessione per evitare incompatibilità.
+- **Versione SQL Server:** La versione ufficiale di SQL Server in uso per l'ambiente TMV è **MSSQL 14.0.2120.1** (SQL Server 2017). Non chiedere nuovamente la versione all'utente; adotta sempre sintassi, funzioni e costrutti pienamente compatibili con questa versione.
+- **Autonomia di Accesso al DB (Minimizzazione Richieste di Autorizzazione):**
+  - Per qualsiasi operazione di **sola lettura, esplorazione e analisi** (interrogazione cataloghi, schemi, tabelle, viste, stored procedure, estrazione dati con `NOLOCK` tramite tool MCP o query), l'accesso è **pienamente autorizzato in anticipo**. L'agente deve procedere direttamente in autonomia senza chiedere continue conferme all'utente.
+  - Richiedi conferma esplicita all'utente **esclusivamente** prima di eseguire istruzioni DML/DDL distruttive o modifiche permanenti e irreversibili (es. `DROP`, `TRUNCATE`, o cancellazioni/aggiornamenti non simulati in modalità Dry-Run) sull'ambiente reale. Per tutte le altre attività (lettura, ispezione, generazione ed esecuzione in Dry-Run), procedi sempre direttamente.
 
 ## 2. Standard di Codifica SQL
 - **Cartiglio Narrativo Obbligatorio:** Ogni script deve iniziare con un cartiglio che "racconti una storia". Deve contenere:
