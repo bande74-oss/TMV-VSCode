@@ -144,3 +144,4 @@ Se in futuro si presentasse la necessità di allineare un nuovo ODL (ad esempio 
    - Modificare `@NUMREG_CO99 = '<NuovoNumReg>'`.
    - Eseguire prima con `@DryRun = 1` e poi con `@DryRun = 0`.
    - Verificare che il report finale confermi la visibilità di tutte le righe su `VPMES_ODLExport`.
+

@@ -95,3 +95,4 @@ I componenti realizzati sono stati collocati nella directory di progetto:
    Script transazionale per il ripristino dello stato a "Da esportare" (ID `10056`, Flusso `10012`) e rimozione controllata del vincolo storico per la riesportazione MES.
 3. **`README_CONTESTO_TECNICO.md`**:  
    Manuale operativo e guida architetturale per sviluppatori e manutentori.
+
