@@ -1,7 +1,7 @@
 USE [DBTMV]
 GO
 
-/****** Object:  StoredProcedure [dbo].[SPSO_AGGIORNA_STATI_RIGA_GEMINI]    Script Date: 14/09/2026 14:15:00 ******/
+/****** Object:  StoredProcedure [dbo].[SPSO_AGGIORNA_STATI_RIGA_GEMINI]    Script Date: 15/09/2026 15:30:00 ******/
 SET ANSI_NULLS ON
 GO
 
@@ -11,7 +11,7 @@ GO
 CREATE OR ALTER PROCEDURE [dbo].[SPSO_AGGIORNA_STATI_RIGA_GEMINI]
 /*
 ========================================================================================================================
-1 - DATA E ORA REVISIONE: 2026-09-14 14:15
+1 - DATA E ORA REVISIONE: 2026-09-15 15:30
 2 - AUTORE              : SOLVERIS - Bandera Marco
 3 - OGGETTO             : Stored Procedure [dbo].[SPSO_AGGIORNA_STATI_RIGA_GEMINI]
 4 - AMBIENTE DI TARGET  : Microsoft SQL Server 2017 (MSSQL 14.0.2120.1) - Database DBTMV
@@ -137,7 +137,7 @@ CREATE OR ALTER PROCEDURE [dbo].[SPSO_AGGIORNA_STATI_RIGA_GEMINI]
                     - Se @DebugNumReg è valorizzato e @DebugRiga è NULL: produce un prospetto tabellare di sintesi con tutte le righe
                       dell'ordine, evidenziando riga, progressivo visualizzazione, codice articolo, descrizione, stato attuale, nuovo stato,
                       regola vincente e variazione proposta.
-    - Rev. 30   : OTTIMIZZAZIONE PREDICATI DI JOIN SU DO33_DOCCORPORIF E COPERTURA INDICI (SVOLTA PRESTAZIONALE MASSIVA E DEBUG).
+    - Rev. 30   : OTTIMIZZAZIONE PREDICATI DI JOIN SUR DO33_DOCCORPORIF E COPERTURA INDICI (SVOLTA PRESTAZIONALE MASSIVA E DEBUG).
                    * Collo di bottiglia individuato: Nei rami di navigazione su DO33_DOCCORPORIF (Regole 11, 12, 12B, 13, 13B),
                      il predicato di ditta su R1 (R1.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC) risultava omesso.
                    * Poiché gli indici su DO33 (tra cui IDX_DO33_COVERING_RIF_GEMINI e IDX02_DO33) hanno come prima colonna chiave
@@ -147,9 +147,35 @@ CREATE OR ALTER PROCEDURE [dbo].[SPSO_AGGIORNA_STATI_RIGA_GEMINI]
                      diventata DO33.DO33_DITTA_CG18 = DO30_PKL.DO30_DITTA_CG18).
                    * Risultato prestazionale: La valutazione delle regole DDT e Packing List crolla da 24 secondi a 3 millisecondi
                      (~8.000x più veloce), azzerando l'I/O su tempdb e salvaguardando l'esecuzione massiva schedulata ogni 30 minuti.
+    - Rev. 31   : RISOLUZIONE REGRESSIONE STATO 10073 E DOPPIO OUTPUT DIAGNOSTICO DRYRUN (INTERVENTO CORRENTE).
+                    * Bug Risolto (Inibizione Impropria Regola 02 - In Produzione):
+                      Nella Rev. 27 era stata inserita in Regola 02 la clausola di Salvaguardia (d)
+                      (NOT EXISTS con DO31_INDSTATOCONS = 3) sul presupposto errato che indicasse la chiusura
+                      definitiva dell'ODL. In Alyante / TeamSystem Enterprise, per i documenti di produzione
+                      (TipoDoc 24), DO31_INDSTATOCONS = 3 indica l'ODL confermato/consolidato per la produzione.
+                      Tale clausola inibiva la Regola 02 per oltre 2.200 righe attive in lavorazione a sistema,
+                      lasciando in graduatoria la sola Regola 01 (ODL Generato -> 10051) e proponendo una
+                      retrocessione spuria da 10073 a 10051.
+                      La rimozione di Salvaguardia (d) ripristina la regolare valutazione della Regola 02; la protezione
+                      contro avanzamenti tardivi su ordini già completati resta pienamente presidiata dalle
+                      rimanenti tre salvaguardie aziendali:
+                        a) Stato attuale già in fase logistica (10063/10076, 10062, 10053/10084, 10068, 10055, 10054);
+                        b) Riga d'impegno cliente totalmente evasa (DO72_FLGEVASO = 1 e DO72_FLGDAEVADERE = 0);
+                        c) Fase 6000 (RTP/Versamento Magazzino) già consolidata (DO46_QTA1CONSOLID >= DO46_QTA1ORD).
+                    * Parametro di Default Sicuro:
+                      Riallineato @ModalitaDryRun BIT = 1 di default per garantire l'esecuzione non distruttiva e
+                      trasparente come prescritto dallo standard di sicurezza GEMINI.MD (Regola 3).
+                    * Doppio Output Diagnostico in Modalità Focus Singola Riga (@DebugTipoFocus = 'RIGA'):
+                      1) Tabella 1 (Graduatoria Concorrenti): Mostra tutti i candidati in #ClassificaStati ordinati
+                         per Ranking (Rn), esponendo la colonna [Esito Ranking] (VINCITORE ASSOLUTO vs SUPERATO),
+                         la PrioritaSequenza, la descrizione dello stato e l'azione proposta (CONFERMATO vs VARIAZIONE).
+                      2) Tabella 2 (Audit Diagnostico Fabbrica): Esegue un riscontro analitico puntuale su tutte le
+                         regole di business e le evidenze fisiche (ODL, fasi DO46, avanzamenti MES DO57, DDT c/lavoro,
+                         versamenti RTP, PKL, DDT di vendita, paracadute storico Regola 99), offrendo ad operatore
+                         e cliente la massima trasparenza sul "perché" ciascuna regola ha o non ha concorso.
 ========================================================================================================================
 */
-    @ModalitaDryRun BIT = 0,            -- PARAMETRO DI SICUREZZA: 1 = Solo simulazione diagnostica (DryOut), 0 = Scrittura reale a DB
+    @ModalitaDryRun BIT = 1,            -- PARAMETRO DI SICUREZZA: 1 = Solo simulazione diagnostica (DryOut), 0 = Scrittura reale a DB
     @DebugDitta INT = NULL,             -- PARAMETRO DI FOCUS: ID Ditta dell'Impegno Cliente da analizzare (es. 1)
     @DebugNumReg VARCHAR(30) = NULL,    -- PARAMETRO DI FOCUS: Numero Registrazione ERP dell'Impegno Cliente (DO30_NUMREG_CO99)
     @DebugRiga INT = NULL               -- PARAMETRO DI FOCUS: Progressivo Riga interno dell'Impegno Cliente (DO30_PROGRIGA)
@@ -461,7 +487,7 @@ BEGIN
         -- Business Logic: Rileva l'avanzamento fisico del pezzo sulle macchine utensili (centri di lavoro interni,
         -- PD12_INDTIPOPROV = 0) per qualsiasi fase di sequenza tecnologica inferiore alla fase di Collaudo (4031).
         --
-        -- PROTEZIONI ANTI-REGRESSIONE (Svolta Architetturale Rev. 27):
+        -- PROTEZIONI ANTI-REGRESSIONE (Architettura Rev. 27, Affinata in Rev. 31):
         -- Nel flusso reale di fabbrica, capita frequentemente che un operatore a bordo macchina (es. per dimenticanza,
         -- correzione ore, rilavorazione postuma o allineamento ritardato delle quantità) registri un movimento MES
         -- in data odierna (DO57_DATAMOV) su una fase iniziale (es. rullatura o sgrossatura), anche se l'ODL è già stato
@@ -470,14 +496,17 @@ BEGIN
         -- della spedizione o del collaudo, facendo erroneamente REGREDIRE una riga già spedita a "In Produzione".
         --
         -- Per impedire questa regressione spuria, la Regola 02 viene categoricamente INIBITA al verificarsi di anche
-        -- una sola delle seguenti 4 condizioni aziendali:
+        -- una sola delle seguenti 3 condizioni aziendali garantite:
         --   a) STATO LOGISTICO GIA AVANZATO: Se lo stato attuale della riga è già arrivato a Packing List (10063/10076),
         --      Merce Pronta AMP (10062), Spedito (10053/10084), Annullato (10068), Diba non necessaria (10055) o Fornitore (10054).
         --   b) RIGA D'ORDINE TOTALMENTE EVASA: Se in DO72_DOCCORPOSTATO la riga risulta con Flag Evaso = 1 e Da Evadere = 0.
         --   c) ODL VERSATO A MAGAZZINO: Se la Fase 6000 (RTP/Versamento Magazzino) presenta già una quantità consolidata
         --      pari o superiore alla quantità ordinata (DO46_QTA1CONSOLID >= DO46_QTA1ORD).
-        --   d) ODL FORMALMENTE CHIUSO: Se la testata dell'ordine di lavoro in DO31 ha assunto lo stato consolidato di
-        --      chiusura definitiva (DO31_INDSTATOCONS = 3).
+        --
+        -- NOTA STORICA (Rev. 31):
+        -- Nella Rev. 27 era stata introdotta una quarta salvaguardia (d) basata su DO31_INDSTATOCONS = 3.
+        -- Tale clausola è stata categoricamente rimossa in quanto in Alyante tale valore designa gli ODL regolarmente
+        -- confermati e lanciati in produzione (e non ordini chiusi), provocando il blocco indebito di 2.277 righe attive.
         -- -------------------------------------------------------------------------------------------------------------
         INSERT INTO #CandidatiStato 
         SELECT B.DO30_GUID, B.DO11_NUMDOC_OC, B.DO11_SEZDOC_OC, B.DO30_NUMREG_CO99_OC, B.DO30_PROGRIGA_OC, B.DO30_PROGVISUASTA_OC, 
@@ -515,13 +544,6 @@ BEGIN
                 AND D_RTP.DO46_PROGRIGA = B.DO30_PROGRIGA_ODL
                 AND D_RTP.DO46_CODFASE = 6000 
                 AND D_RTP.DO46_QTA1CONSOLID >= D_RTP.DO46_QTA1ORD
-          )
-          AND NOT EXISTS (                                                                                   -- Salvaguardia (d)
-              SELECT 1 FROM dbo.DO31_DOCCORPOORD O_CHIUSO WITH (NOLOCK)
-              WHERE O_CHIUSO.DO31_DITTA_CG18 = B.DO30_DITTA_CG18_ODL
-                AND O_CHIUSO.DO31_NUMREG_CO99 = B.DO30_NUMREG_CO99_ODL
-                AND O_CHIUSO.DO31_PROGRIGA = B.DO30_PROGRIGA_ODL
-                AND O_CHIUSO.DO31_INDSTATOCONS = 3
           );
 
         -- -------------------------------------------------------------------------------------------------------------
@@ -1064,23 +1086,221 @@ BEGIN
             -- ---------------------------------------------------------------------------------------------------------
             IF @DebugTipoFocus = 'RIGA'
             BEGIN
-                -- Sotto-caso A1: Focus su singola riga di DEBUG.
-                -- Mostra TUTTI i candidati che hanno concorso al ranking, ordinati per Rn, permettendo di capire
-                -- esattamente quale regola si è classificata al 1° posto, quale al 2°, e perché.
+                -- ---------------------------------------------------------------------------------------------
+                -- Sotto-caso A1: Focus su singola riga di DEBUG (Rev. 31 - Doppio Output Diagnostico).
+                -- OUTPUT 1: GRADUATORIA CANDIDATI E RISOLUZIONE DEL RANKING (Candidati Concorrenti)
+                -- Mostra TUTTI i candidati che hanno concorso al ranking, ordinati per Rn, evidenziando
+                -- quale regola si è classificata al 1° posto (Vincitore Assoluto), quale al 2°, la priorità di
+                -- scioglimento pareggi e l'azione proposta (Conferma vs Variazione).
+                -- ---------------------------------------------------------------------------------------------
                 SELECT 
-                    DO30_GUID AS [GUID Riga], 
-                    Rn AS [Ranking], 
-                    DO11_NUMDOC AS [Num. Doc. OC], 
-                    DO11_SEZDOC AS [Sez. Doc.], 
-                    DO30_NUMREG_CO99 AS [Num. Reg. OC], 
-                    DO30_PROGRIGA AS [Prog. Riga Int.], 
-                    DO30_PROGVISUASTA AS [Prog. Vis. OC], 
-                    OrigineRegola AS [Regola Valutata], 
-                    DataEvento AS [Data Evento Calcolata], 
-                    CO4H_IDSTATO_CO4C_ATTUALE AS [Stato Attuale], 
-                    CO4H_IDSTATO_CO4C_NEW AS [Nuovo Stato Proposto]
-                FROM #ClassificaStati WITH (NOLOCK) 
-                ORDER BY Rn;
+                    CS.Rn AS [Ranking], 
+                    IIF(CS.Rn = 1, 'VINCITORE ASSOLUTO (Rn = 1)', 'CANDIDATO SUPERATO') AS [Esito Ranking], 
+                    CS.OrigineRegola AS [Regola Valutata], 
+                    CS.CO4H_IDSTATO_CO4C_NEW AS [Nuovo Stato ID],
+                    CASE CS.CO4H_IDSTATO_CO4C_NEW
+                        WHEN 10045 THEN '10045 - Bozza / Inserito'
+                        WHEN 10046 THEN '10046 - Confermato'
+                        WHEN 10051 THEN '10051 - ODL Generato'
+                        WHEN 10073 THEN '10073 - In Produzione'
+                        WHEN 10080 THEN '10080 - In Collaudo'
+                        WHEN 10069 THEN '10069 - Attesa Invio C/Lav (Tratt. 1)'
+                        WHEN 10081 THEN '10081 - Attesa Invio C/Lav (Tratt. 2)'
+                        WHEN 10070 THEN '10070 - Uscito C/Lav (Tratt. 1)'
+                        WHEN 10071 THEN '10071 - Uscito C/Lav (Tratt. 2)'
+                        WHEN 10074 THEN '10074 - In Lavorazione Terzista (Tratt. 1)'
+                        WHEN 10082 THEN '10082 - In Lavorazione Terzista (Tratt. 2)'
+                        WHEN 10072 THEN '10072 - Rientro C/Lav (Tratt. 1)'
+                        WHEN 10078 THEN '10078 - Rientro C/Lav (Tratt. 2)'
+                        WHEN 10075 THEN '10075 - Smistato C/Lav (Tratt. 1)'
+                        WHEN 10083 THEN '10083 - Smistato C/Lav (Tratt. 2)'
+                        WHEN 10052 THEN '10052 - RTP / Versamento Magazzino'
+                        WHEN 10063 THEN '10063 - In Packing List (PKL)'
+                        WHEN 10076 THEN '10076 - PKL Parziale'
+                        WHEN 10062 THEN '10062 - Avviso Merce Pronta (AMP)'
+                        WHEN 10053 THEN '10053 - Spedito Totale'
+                        WHEN 10084 THEN '10084 - Spedito Parziale'
+                        WHEN 10055 THEN '10055 - DIBA Non Necessaria'
+                        WHEN 10068 THEN '10068 - Annullato'
+                        ELSE CAST(CS.CO4H_IDSTATO_CO4C_NEW AS VARCHAR(10))
+                    END AS [Descrizione Stato Proposto],
+                    CS.DataEvento AS [Data Evento Calcolata], 
+                    CS.PrioritaSequenza AS [Priorita Sequenza], 
+                    CS.CO4H_IDSTATO_CO4C_ATTUALE AS [Stato Attuale], 
+                    IIF(CS.CO4H_IDSTATO_CO4C_ATTUALE = CS.CO4H_IDSTATO_CO4C_NEW, 
+                        'CONFERMATO (Invariato)', 
+                        'VARIAZIONE: ' + CAST(CS.CO4H_IDSTATO_CO4C_ATTUALE AS VARCHAR(10)) + ' -> ' + CAST(CS.CO4H_IDSTATO_CO4C_NEW AS VARCHAR(10))
+                    ) AS [Azione Proposta],
+                    CS.DO11_NUMDOC AS [Num. Doc. OC], 
+                    CS.DO11_SEZDOC AS [Sez. Doc.], 
+                    CS.DO30_NUMREG_CO99 AS [Num. Reg. OC], 
+                    CS.DO30_PROGRIGA AS [Prog. Riga Int.], 
+                    CS.DO30_PROGVISUASTA AS [Prog. Vis. OC], 
+                    CS.DO30_GUID AS [GUID Riga]
+                FROM #ClassificaStati CS WITH (NOLOCK) 
+                ORDER BY CS.Rn;
+
+                -- ---------------------------------------------------------------------------------------------
+                -- OUTPUT 2: AUDIT DIAGNOSTICO DETTAGLIATO DELLE EVIDENZE DI FABBRICA (Rev. 31)
+                -- Verifica puntualmente il riscontro documentale di ciascuna regola di business per la riga target,
+                -- spiegando ad operatore e manutentore perche ogni regola ha generato un candidato o e stata esclusa.
+                -- ---------------------------------------------------------------------------------------------
+                SELECT 
+                    Audit.CodiceRegola AS [Regola],
+                    Audit.StatoTarget AS [Stato Target],
+                    Audit.EsitoRegola AS [Esito Valutazione],
+                    Audit.DettaglioVerifica AS [Dettaglio Tecnico / Prove Documentali Riscontrate]
+                FROM #BaseDatiRiga B
+                CROSS APPLY (
+                    -- Regola 01
+                    SELECT 
+                        'Regola 01 - ODL Generato' AS CodiceRegola, 
+                        '10051 - ODL Generato' AS StatoTarget,
+                        IIF(B.DO11_DOCUM_MG36_ODL IS NOT NULL, 'CANDIDATO GENERATO', 'NON APPLICABILE') AS EsitoRegola,
+                        IIF(B.DO11_DOCUM_MG36_ODL IS NOT NULL, 
+                            'ODL ' + RTRIM(B.DO11_DOCUM_MG36_ODL) + ' presente (NumReg: ' + RTRIM(B.DO30_NUMREG_CO99_ODL) + ', Riga: ' + CAST(B.DO30_PROGRIGA_ODL AS VARCHAR) + ') del ' + CONVERT(VARCHAR(10), B.DO11_DATADOC_ODL, 120),
+                            'Nessun ODL attivo collegato su DO33') AS DettaglioVerifica
+
+                    UNION ALL
+
+                    -- Regola 02
+                    SELECT 
+                        'Regola 02 - In Produzione' AS CodiceRegola,
+                        '10073 - In Produzione' AS StatoTarget,
+                        CASE 
+                            WHEN B.DO30_NUMREG_CO99_ODL IS NULL THEN 'NON APPLICABILE'
+                            WHEN FASI2.NumFasi IS NULL OR FASI2.NumFasi = 0 THEN 'NON APPLICABILE'
+                            WHEN B.CO4H_IDSTATO_CO4C_ATTUALE IN (10063, 10076, 10062, 10053, 10084, 10068, 10055, 10054) THEN 'INIBITO DA SALVAGUARDIA'
+                            WHEN EXISTS (SELECT 1 FROM dbo.DO72_DOCCORPOSTATO S WITH (NOLOCK) WHERE S.DO72_DITTA_CG18 = B.DO30_DITTA_CG18_OC AND S.DO72_NUMREG_CO99 = B.DO30_NUMREG_CO99_OC AND S.DO72_PROGRIGA = B.DO30_PROGRIGA_OC AND S.DO72_FLGEVASO = 1 AND S.DO72_FLGDAEVADERE = 0) THEN 'INIBITO DA SALVAGUARDIA'
+                            WHEN EXISTS (SELECT 1 FROM dbo.DO46_DOCCORORDDET D_RTP WITH (NOLOCK) WHERE D_RTP.DO46_DITTA_CG18 = B.DO30_DITTA_CG18_ODL AND D_RTP.DO46_NUMREG_CO99 = B.DO30_NUMREG_CO99_ODL AND D_RTP.DO46_PROGRIGA = B.DO30_PROGRIGA_ODL AND D_RTP.DO46_CODFASE = 6000 AND D_RTP.DO46_QTA1CONSOLID >= D_RTP.DO46_QTA1ORD) THEN 'INIBITO DA SALVAGUARDIA'
+                            ELSE 'CANDIDATO GENERATO'
+                        END AS EsitoRegola,
+                        CASE 
+                            WHEN B.DO30_NUMREG_CO99_ODL IS NULL THEN 'Nessun ODL presente'
+                            WHEN FASI2.NumFasi IS NULL OR FASI2.NumFasi = 0 THEN 'Nessuna fase interna avanzata (< limite collaudo)'
+                            WHEN B.CO4H_IDSTATO_CO4C_ATTUALE IN (10063, 10076, 10062, 10053, 10084, 10068, 10055, 10054) THEN 'Inibito da Salvaguardia (a): Stato attuale gia avanzato (' + CAST(B.CO4H_IDSTATO_CO4C_ATTUALE AS VARCHAR) + ')'
+                            WHEN EXISTS (SELECT 1 FROM dbo.DO72_DOCCORPOSTATO S WITH (NOLOCK) WHERE S.DO72_DITTA_CG18 = B.DO30_DITTA_CG18_OC AND S.DO72_NUMREG_CO99 = B.DO30_NUMREG_CO99_OC AND S.DO72_PROGRIGA = B.DO30_PROGRIGA_OC AND S.DO72_FLGEVASO = 1 AND S.DO72_FLGDAEVADERE = 0) THEN 'Inibito da Salvaguardia (b): Riga OC totalmente evasa (DO72_FLGEVASO=1)'
+                            WHEN EXISTS (SELECT 1 FROM dbo.DO46_DOCCORORDDET D_RTP WITH (NOLOCK) WHERE D_RTP.DO46_DITTA_CG18 = B.DO30_DITTA_CG18_ODL AND D_RTP.DO46_NUMREG_CO99 = B.DO30_NUMREG_CO99_ODL AND D_RTP.DO46_PROGRIGA = B.DO30_PROGRIGA_ODL AND D_RTP.DO46_CODFASE = 6000 AND D_RTP.DO46_QTA1CONSOLID >= D_RTP.DO46_QTA1ORD) THEN 'Inibito da Salvaguardia (c): Fase 6000 RTP gia consolidata'
+                            ELSE 'Rilevate ' + CAST(FASI2.NumFasi AS VARCHAR) + ' fase/i interna/e avanzata/e. Ultimo avanzamento MES: ' + CONVERT(VARCHAR(10), FASI2.MaxDataMov, 120) + ' (Fase ' + CAST(FASI2.UltimaFase AS VARCHAR) + '). Salvaguardie superate.'
+                        END AS DettaglioVerifica
+                    FROM (
+                        SELECT 
+                            COUNT(DISTINCT D.DO46_CODFASE) AS NumFasi, 
+                            MAX(ADV.DO57_DATAMOV) AS MaxDataMov,
+                            MAX(D.DO46_CODFASE) AS UltimaFase
+                        FROM dbo.DO46_DOCCORORDDET D WITH (NOLOCK)
+                        INNER JOIN dbo.PD12_FASILAVORO P WITH (NOLOCK) ON D.DO46_DITTA_CG18 = P.PD12_DITTA_CG18 AND D.DO46_CODFASE = P.PD12_CODFASE
+                        LEFT JOIN dbo.DO57_DETAVANZ ADV WITH (NOLOCK) ON D.DO46_DITTA_CG18 = ADV.DO57_DITTA_CG18 AND D.DO46_NUMREG_CO99 = ADV.DO57_NUMREG_CO99 AND D.DO46_PROGRIGA = ADV.DO57_PROGRIGA_DO46 AND D.DO46_PROGDET = ADV.DO57_PROGDET_DO46
+                        CROSS APPLY (
+                            SELECT ISNULL(MAX(CASE WHEN L.DO46_CODFASE = 4031 THEN L.DO46_CODSEQFASE END), MAX(L.DO46_CODSEQFASE)) AS SEQ_LIMITE 
+                            FROM dbo.DO46_DOCCORORDDET L WITH (NOLOCK) 
+                            WHERE L.DO46_DITTA_CG18 = D.DO46_DITTA_CG18 AND L.DO46_NUMREG_CO99 = D.DO46_NUMREG_CO99 AND L.DO46_PROGRIGA = D.DO46_PROGRIGA
+                        ) AS LIM
+                        WHERE D.DO46_DITTA_CG18 = B.DO30_DITTA_CG18_ODL AND D.DO46_NUMREG_CO99 = B.DO30_NUMREG_CO99_ODL AND D.DO46_PROGRIGA = B.DO30_PROGRIGA_ODL
+                          AND P.PD12_INDTIPOPROV = 0 
+                          AND D.DO46_CODSEQFASE < LIM.SEQ_LIMITE 
+                          AND ISNULL(D.DO46_QTA1CONSOLID, 0) > 0
+                    ) AS FASI2
+
+                    UNION ALL
+
+                    -- Regola 03
+                    SELECT 
+                        'Regola 03 - Collaudo' AS CodiceRegola,
+                        '10080 - Collaudo' AS StatoTarget,
+                        IIF(COLL.QtaConsolid > 0, 'CANDIDATO GENERATO', 'NON APPLICABILE'),
+                        IIF(COLL.QtaConsolid > 0, 
+                            'Fase 4031 (Collaudo) consolidata (Qta: ' + CAST(COLL.QtaConsolid AS VARCHAR) + ') del ' + CONVERT(VARCHAR(10), COLL.DataMov, 120),
+                            'Fase 4031 non presente o non consolidata su ODL')
+                    FROM (
+                        SELECT MAX(D.DO46_QTA1CONSOLID) AS QtaConsolid, MAX(ADV.DO57_DATAMOV) AS DataMov
+                        FROM dbo.DO46_DOCCORORDDET D WITH (NOLOCK)
+                        INNER JOIN dbo.PD12_FASILAVORO P WITH (NOLOCK) ON D.DO46_DITTA_CG18 = P.PD12_DITTA_CG18 AND D.DO46_CODFASE = P.PD12_CODFASE
+                        LEFT JOIN dbo.DO57_DETAVANZ ADV WITH (NOLOCK) ON D.DO46_DITTA_CG18 = ADV.DO57_DITTA_CG18 AND D.DO46_NUMREG_CO99 = ADV.DO57_NUMREG_CO99 AND D.DO46_PROGRIGA = ADV.DO57_PROGRIGA_DO46 AND D.DO46_PROGDET = ADV.DO57_PROGDET_DO46
+                        WHERE D.DO46_DITTA_CG18 = B.DO30_DITTA_CG18_ODL AND D.DO46_NUMREG_CO99 = B.DO30_NUMREG_CO99_ODL AND D.DO46_PROGRIGA = B.DO30_PROGRIGA_ODL
+                          AND P.PD12_INDTIPOPROV = 0 AND D.DO46_CODFASE = 4031 AND D.DO46_QTA1CONSOLID > 0
+                    ) AS COLL
+
+                    UNION ALL
+
+                    -- Regola 09 / 09B
+                    SELECT 
+                        'Regola 09 - RTP Magazzino' AS CodiceRegola,
+                        '10052 - RTP / Versamento Magazzino' AS StatoTarget,
+                        CASE 
+                            WHEN B.FLG_FAKE_ODL = 1 THEN 'CANDIDATO GENERATO (Fake ODL)'
+                            WHEN RTP.QtaConsolid > 0 THEN 'CANDIDATO GENERATO' 
+                            ELSE 'NON APPLICABILE' 
+                        END,
+                        CASE 
+                            WHEN B.FLG_FAKE_ODL = 1 THEN 'Pattern Fake ODL rilevato nello storico CO4I (Regola 09B)'
+                            WHEN RTP.QtaConsolid > 0 THEN 'Fase 6000 (RTP) consolidata (Qta: ' + CAST(RTP.QtaConsolid AS VARCHAR) + ') del ' + CONVERT(VARCHAR(10), RTP.DataMov, 120)
+                            ELSE 'Fase 6000 non presente o non consolidata su ODL'
+                        END
+                    FROM (
+                        SELECT MAX(D.DO46_QTA1CONSOLID) AS QtaConsolid, MAX(ADV.DO57_DATAMOV) AS DataMov
+                        FROM dbo.DO46_DOCCORORDDET D WITH (NOLOCK)
+                        INNER JOIN dbo.PD12_FASILAVORO P WITH (NOLOCK) ON D.DO46_DITTA_CG18 = P.PD12_DITTA_CG18 AND D.DO46_CODFASE = P.PD12_CODFASE
+                        LEFT JOIN dbo.DO57_DETAVANZ ADV WITH (NOLOCK) ON D.DO46_DITTA_CG18 = ADV.DO57_DITTA_CG18 AND D.DO46_NUMREG_CO99 = ADV.DO57_NUMREG_CO99 AND D.DO46_PROGRIGA = ADV.DO57_PROGRIGA_DO46 AND D.DO46_PROGDET = ADV.DO57_PROGDET_DO46
+                        WHERE D.DO46_DITTA_CG18 = B.DO30_DITTA_CG18_ODL AND D.DO46_NUMREG_CO99 = B.DO30_NUMREG_CO99_ODL AND D.DO46_PROGRIGA = B.DO30_PROGRIGA_ODL
+                          AND P.PD12_INDTIPOPROV = 0 AND D.DO46_CODFASE = 6000 AND D.DO46_QTA1CONSOLID > 0
+                    ) AS RTP
+
+                    UNION ALL
+
+                    -- Regola 10
+                    SELECT 
+                        'Regola 10 - Packing List' AS CodiceRegola,
+                        '10063 / 10076 - In Packing List' AS StatoTarget,
+                        IIF(PKL.DataDoc IS NOT NULL, 'CANDIDATO GENERATO', 'NON APPLICABILE'),
+                        IIF(PKL.DataDoc IS NOT NULL, 
+                            'PKL presente (Doc ' + CAST(PKL.NumDoc AS VARCHAR) + ' del ' + CONVERT(VARCHAR(10), PKL.DataDoc, 120) + ', Qta: ' + CAST(PKL.Qta AS VARCHAR) + ')',
+                            'Nessuna Packing List (TipoDoc 9) collegata su DO33')
+                    FROM (SELECT 1 AS Dummy) DummyPKL
+                    OUTER APPLY (
+                        SELECT TOP 1 T_PKL.DO11_NUMDOC AS NumDoc, T_PKL.DO11_DATADOC AS DataDoc, C_PKL.DO30_QTA1 AS Qta
+                        FROM dbo.DO33_DOCCORPORIF R WITH (NOLOCK)
+                        INNER JOIN dbo.DO30_DOCCORPO C_PKL WITH (NOLOCK) ON R.DO33_DITTA_CG18 = C_PKL.DO30_DITTA_CG18 AND R.DO33_NUMREG_CO99 = C_PKL.DO30_NUMREG_CO99 AND R.DO33_PROGRIGA = C_PKL.DO30_PROGRIGA
+                        INNER JOIN dbo.DO11_DOCTESTATA T_PKL WITH (NOLOCK) ON C_PKL.DO30_DITTA_CG18 = T_PKL.DO11_DITTA_CG18 AND C_PKL.DO30_NUMREG_CO99 = T_PKL.DO11_NUMREG_CO99
+                        WHERE R.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC AND R.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC AND R.DO33_PROGRIGARIF_DO30 = B.DO30_PROGRIGA_OC
+                          AND T_PKL.DO11_TIPODOC = 9 AND T_PKL.DO11_STIPODOC = 1
+                        ORDER BY T_PKL.DO11_DATADOC DESC
+                    ) AS PKL
+
+                    UNION ALL
+
+                    -- Regola 13
+                    SELECT 
+                        'Regola 13 - Spedito' AS CodiceRegola,
+                        '10053 / 10084 - Spedito (Totale / Parziale)' AS StatoTarget,
+                        IIF(DDT.DataDoc IS NOT NULL, 'CANDIDATO GENERATO', 'NON APPLICABILE'),
+                        IIF(DDT.DataDoc IS NOT NULL, 
+                            'DDT presente (Doc ' + CAST(DDT.NumDoc AS VARCHAR) + ' del ' + CONVERT(VARCHAR(10), DDT.DataDoc, 120) + ', Qta: ' + CAST(DDT.Qta AS VARCHAR) + ')',
+                            'Nessun DDT di spedizione (TipoDoc 1 o 5/2) collegato su DO33')
+                    FROM (SELECT 1 AS Dummy) DummyDDT
+                    OUTER APPLY (
+                        SELECT TOP 1 T_DDT.DO11_NUMDOC AS NumDoc, T_DDT.DO11_DATADOC AS DataDoc, C_DDT.DO30_QTA1 AS Qta
+                        FROM dbo.DO33_DOCCORPORIF R WITH (NOLOCK)
+                        INNER JOIN dbo.DO30_DOCCORPO C_DDT WITH (NOLOCK) ON R.DO33_DITTA_CG18 = C_DDT.DO30_DITTA_CG18 AND R.DO33_NUMREG_CO99 = C_DDT.DO30_NUMREG_CO99 AND R.DO33_PROGRIGA = C_DDT.DO30_PROGRIGA
+                        INNER JOIN dbo.DO11_DOCTESTATA T_DDT WITH (NOLOCK) ON C_DDT.DO30_DITTA_CG18 = T_DDT.DO11_DITTA_CG18 AND C_DDT.DO30_NUMREG_CO99 = T_DDT.DO11_NUMREG_CO99
+                        WHERE R.DO33_DITTA_CG18 = B.DO30_DITTA_CG18_OC AND R.DO33_NUMREGRIF_CO99 = B.DO30_NUMREG_CO99_OC AND R.DO33_PROGRIGARIF_DO30 = B.DO30_PROGRIGA_OC
+                          AND (T_DDT.DO11_TIPODOC = 1 OR (T_DDT.DO11_TIPODOC = 5 AND T_DDT.DO11_STIPODOC = 2))
+                        ORDER BY T_DDT.DO11_DATADOC DESC
+                    ) AS DDT
+
+                    UNION ALL
+
+                    -- Regola 99
+                    SELECT 
+                        'Regola 99 - Universal Rollback' AS CodiceRegola,
+                        'Ripristino Stato Storico' AS StatoTarget,
+                        IIF(EXISTS (SELECT 1 FROM #CandidatiStato C WHERE C.DO30_GUID = B.DO30_GUID AND C.OrigineRegola NOT LIKE 'Regola 99%'), 
+                            'NON ATTIVA (Superflua)', 
+                            'ATTIVA (Paracadute Storico)'),
+                        IIF(EXISTS (SELECT 1 FROM #CandidatiStato C WHERE C.DO30_GUID = B.DO30_GUID AND C.OrigineRegola NOT LIKE 'Regola 99%'),
+                            'Paracadute non necessario: presenti regole attive concorrenti',
+                            'Nessuna regola documentale soddisfatta: attivato recupero da storico CO4I')
+                ) AS Audit;
             END
             ELSE IF @DebugTipoFocus = 'DOCUMENTO'
             BEGIN
