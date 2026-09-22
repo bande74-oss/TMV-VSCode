@@ -204,3 +204,4 @@ EXEC [dbo].[SPSO_AGGIORNA_STATI_RIGA_GEMINI]
 sqlcmd -S "NB-BANDERA\SQL2019" -d DBTMV -i "STATI - RIGA\SPSO_AGGIORNA_STATI_RIGA_GEMINI.sql"
 ```
 *(Usare `sqlcmd` da riga di comando per bypassare il limite di 100.000 caratteri di `mssql_execute`).*
+
