@@ -38,3 +38,34 @@ Quando viene esplicitamente richiesta la redazione di un "documento tecnico SQL"
 - **Parte 1 (Logiche di Business):** Sezione discorsiva, molto dettagliata e potenzialmente prolissa, scritta con l'obiettivo di essere facilmente compresa da un "non addetto ai lavori" o dall'utente finale.
 - **Parte 2 (Scelte Tecniche):** Sezione molto dettagliata, indirizzata a un potenziale collega sviluppatore (per handover di gestione e manutenzione). Spiega a fondo le scelte tecniche adottate.
 - **Parte 3 (Appendice Sorgenti - su richiesta):** Chiedi sempre all'utente se desidera integrare il documento con una terza parte contenente tutti gli script per esteso.
+
+## 6. Architettura e Tracciabilità Modulo ImpExp/Batch Gamma Enterprise (Tabelle IE...)
+Nel sistema ERP TeamSystem Gamma Enterprise, i flussi automatici, le integrazioni massive e i processi batch (es. `TMV-LPM`, `TMV-PLANNING`, ecc.) sono governati dal sottosistema **IE (Import/Export)**. L'agente deve consultare sistematicamente queste tabelle per ricostruire il comportamento dei tracciati e analizzare eventuali anomalie di elaborazione:
+
+### 6.1 Struttura e Configurazione dei Tracciati (Mapping Dati)
+- **`IE25_TRACCIATI` (Testata del Tracciato)**:
+  - Definisce l'identificativo del tracciato (`IE25_TRACCIATO`), la descrizione, la struttura (`IE25_STRUTTURA_IE21`, es. 4 = Documenti), la sorgente dati (`IE25_TABELLAFILE` o `IE25_TABELLA`), le clausole di filtro (`IE25_WHERE`), l'ordinamento obbligatorio (`IE25_ORDERBY`) e comandi pre/post elaborazione (`IE25_COMANDOIMP`, `IE25_COMANDOEXP`).
+- **`IE26_TRACCIATIRIGHE` (Righe/Sezioni del Tracciato)**:
+  - Definisce i livelli di record gestiti (es. `IE26_INDTIPOREC`: 1 = Testata Documento, 3 = Corpo/Righe, ecc.) e le condizioni logiche di stacco/cambio testata (`IE26_CONDIZIONEIMP`, es. confronto con `PRECEDENTE`).
+- **`IE27_TRACCIATICAMPI` (Definizione e Mappatura dei Campi)**:
+  - Mappa ogni singolo campo di destinazione (`IE27_NOMECAMPO`) associandolo alla colonna sorgente (`IE27_CAMPOASSOCIATO`) o a espressioni/formule T-SQL (`IE27_ESPRESSIONE`).
+- **`IE28_TRASCODIF` (Logiche di Trascodifica)**:
+  - Definisce le tabelle di trascodifica per convertire codifiche esterne in codifiche interne Gamma.
+- **`IE29_TRASCODIFVAL` (Valori di Trascodifica)**:
+  - Contiene le coppie chiave-valore di trascodifica (valore esterno $\rightarrow$ valore interno).
+
+### 6.2 Orchestrazione dei Processi: Insiemi di Elaborazione (Pipeline)
+- **`IE33_INSIEMI` (Testata Insiemi)**:
+  - Raggruppa una sequenza ordinata di tracciati o passaggi operativi in una singola pipeline logica (es. `TMV-LPM`).
+- **`IE34_INSIEMIDETT` (Righe/Passaggi dell'Insieme)**:
+  - Dettaglia la sequenza temporale di esecuzione (`IE34_PROG`, `IE34_DESCRIZIONE`), il tracciato richiamato (`IE34_TRACCIATO_IE25`), la tipologia di operazione (`IE34_INDIMPEXP`: 1 = Import) e il flag di abilitazione (`IE34_FLGATTIVO`).
+- **`IE35_PARAMIMPEXP` (Parametri Insiemi ImpExp)** e **`IE36_PARAMINSIEMI` (Parametri Insiemi)**:
+  - Gestiscono parametri globali, cartelle di transito, sovrascritture e impostazioni di runtime dei batch.
+
+### 6.3 Audit Trail e Diagnostica delle Elaborazioni (Log di Esecuzione)
+- **`IE4C_LOGIMPEXP` (LOG - Testata Esecuzione)**:
+  - Registra ogni lancio dell'insieme/tracciato con ID univoco (`IE4C_IDIMPEXP`), data/ora di inizio (`IE4C_MOMENTO`), utente (`IE4C_UTENTE`, es. `TeamSa` per i job schedulati a tempo), stato di completamento e note generali.
+- **`IE4D_RECORDS` (LOG - Record Elaborati)**:
+  - Dettaglia i singoli documenti creati o falliti durante l'esecuzione (`IE4D_ID_IE4C`). Riporta il codice documento generato (`DF-ORDINECLP`, numero e sezionale), l'esito (`IE4D_RISULTATO`: 0 = Creato/OK, 1 = Info/Init, 2 = Warning, >2 = Errore) e le note descrittive (`IE4D_NOTE`).
+- **`IE4E_DETAIL` (LOG - Dettaglio Campi)**:
+  - Contiene il dettaglio campo per campo dei valori scritti o falliti per ciascun record tracciato in `IE4D`.
