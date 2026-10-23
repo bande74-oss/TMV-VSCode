@@ -69,7 +69,12 @@ public class NkeApiClient : INkeApiClient
                 _logger.LogError("Errore HTTP da NKE: {Status} - {Reason}", result.HttpStatus, response.ReasonPhrase);
             }
         }
-        catch (TaskCanceledException tex) when (!ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _logger.LogInformation("Chiamata NKE annullata per arresto del servizio.");
+            throw;
+        }
+        catch (Exception tex) when (tex is TaskCanceledException || tex is TimeoutException)
         {
             sw.Stop();
             result.LatencyMs = (int)sw.ElapsedMilliseconds;

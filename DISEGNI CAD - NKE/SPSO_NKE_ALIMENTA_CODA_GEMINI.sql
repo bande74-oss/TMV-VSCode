@@ -63,6 +63,13 @@
 --    evitando che tentativi falliti o andati in timeout inibiscano permanentemente la successiva rielaborazione automatica.
 -- 2. Tracciabilità 1-a-Molti: integrato il popolamento automatico della tabella ponte [dbo].[RT13_NKE_DOCS_GEMINI], conservando
 --    i riferimenti a NumDoc, Riga e Ragione Sociale cliente (da CG44_CLIFOR e CG16_ANAGGEN) per ciascun disegno deduplicato in coda.
+--
+-- Rev. 2 | 2026-10-23 | SOLVERIS - Bandera Marco
+-- Hardening post-review:
+-- 1. Risoluzione loop infinito Dead-Letter (Critical-02): in scansione massiva schedulata (@NumDoc IS NULL), gli elementi già a log
+--    non vengono re-inoltrati automaticamente per non saturare Inventor. Il recupero di righe fallite (RT13_FILE_GENERATO = 0)
+--    avviene quando l'operatore interroga o forza la specifica conferma d'ordine (@NumDoc = ...).
+-- 2. Protezione anti-duplicazione su RT13_NKE_DOCS_GEMINI: inserito controllo NOT EXISTS per evitare record duplicati in caso di rilanci forzati multipli.
 -- =================================================================================================================================
 
 CREATE OR ALTER PROCEDURE [dbo].[SPSO_NKE_ALIMENTA_CODA_GEMINI]
@@ -168,15 +175,21 @@ BEGIN
         s.CO4C_DESCRIZIONE,
         CASE 
             WHEN q.MG87_GUID IS NOT NULL THEN 'IN_CODA'
-            WHEN l.MG87_GUID IS NOT NULL AND @ForzaReinvio = 0 THEN 'GIA_A_LOG'
+            -- In scansione massiva schedulata (@NumDoc IS NULL), qualsiasi presenza a log è considerata già gestita
+            -- per evitare loop infiniti di righe fallite (Dead-Letter) ogni 10 minuti.
+            WHEN l.MG87_GUID IS NOT NULL AND @NumDoc IS NULL THEN 'GIA_A_LOG'
+            -- Su singolo ordine mirato (@NumDoc IS NOT NULL):
+            -- se già generato con successo (1) e senza forzatura, è ignorato; se fallito in precedenza (0), viene proposto per il reinvio/recupero.
+            WHEN l.MG87_GUID IS NOT NULL AND @ForzaReinvio = 0 AND l.RT13_FILE_GENERATO = 1 THEN 'GIA_A_LOG'
             WHEN l.MG87_GUID IS NOT NULL AND @ForzaReinvio = 1 THEN 'DA_REINVIARE_FORZATO'
             ELSE 'DA_INSERIRE_NUOVO'
         END AS EsitoDelta,
         CASE 
             WHEN q.MG87_GUID IS NOT NULL THEN 'Richiesta già presente nella coda di dispatching RT13_NKE'
-            WHEN l.MG87_GUID IS NOT NULL AND @ForzaReinvio = 0 THEN 'Disegno CAD già generato con successo in passato (rilevato in RT13_NKE_LOG con flag generato)'
+            WHEN l.MG87_GUID IS NOT NULL AND @NumDoc IS NULL THEN 'Disegno già processato in precedenza (rilevato a log; non re-inoltrato in scansione automatica per prevenire loop)'
+            WHEN l.MG87_GUID IS NOT NULL AND @ForzaReinvio = 0 AND l.RT13_FILE_GENERATO = 1 THEN 'Disegno CAD già generato con successo in passato (rilevato in RT13_NKE_LOG con file generato)'
             WHEN l.MG87_GUID IS NOT NULL AND @ForzaReinvio = 1 THEN 'Forzatura operatore: disegno già a log ma re-inoltrato con flag sovrascrittura'
-            ELSE 'Nuova combinazione Articolo/Variante mai generata o fallita in precedenza'
+            ELSE 'Nuova combinazione Articolo/Variante mai generata o fallita in precedenza da recuperare'
         END AS MotivoAzione
     FROM dbo.DO11_DOCTESTATA d WITH (NOLOCK)
     INNER JOIN dbo.DO30_DOCCORPO c WITH (NOLOCK)
@@ -209,12 +222,12 @@ BEGIN
         FROM dbo.RT13_NKE q1 WITH (NOLOCK)
         WHERE q1.MG87_GUID = a.MG87_GUID
     ) q
-    -- Verifica storico pregresso in RT13_NKE_LOG (solo se generato con successo: RT13_FILE_GENERATO = 1)
+    -- Verifica storico pregresso in RT13_NKE_LOG (ultimo tentativo registrato)
     OUTER APPLY (
-        SELECT TOP 1 l1.MG87_GUID
+        SELECT TOP 1 l1.MG87_GUID, l1.RT13_FILE_GENERATO
         FROM dbo.RT13_NKE_LOG l1 WITH (NOLOCK)
         WHERE l1.MG87_GUID = a.MG87_GUID
-          AND l1.RT13_FILE_GENERATO = 1
+        ORDER BY l1.RT13_DATETIME_LOG DESC
     ) l
     WHERE d.DO11_DITTA_CG18 = 1
       AND d.DO11_DOCUM_MG36 IN ('DC-ORDINE', 'DC-ORDGAR')
@@ -349,7 +362,13 @@ BEGIN
             c.RAGIONE_SOCIALE,
             GETDATE()
         FROM #CandidateNKE c
-        WHERE c.EsitoDelta IN ('DA_INSERIRE_NUOVO', 'DA_REINVIARE_FORZATO');
+        WHERE c.EsitoDelta IN ('DA_INSERIRE_NUOVO', 'DA_REINVIARE_FORZATO')
+          AND NOT EXISTS (
+              SELECT 1 FROM dbo.RT13_NKE_DOCS_GEMINI doc WITH (NOLOCK)
+              WHERE doc.MG87_GUID = c.MG87_GUID
+                AND doc.DO11_NUMDOC = c.DO11_NUMDOC
+                AND doc.DO30_PROGRIGA = c.DO30_PROGRIGA
+          );
 
         COMMIT TRANSACTION;
 

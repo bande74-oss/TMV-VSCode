@@ -4,4 +4,7 @@ bin/
 obj/
 **/bin/
 **/obj/
+publish/
+**/publish/
+.superpowers/
 

@@ -114,3 +114,4 @@ public class DispatcherWorker : BackgroundService
         _logger.LogInformation("DispatcherWorker terminato regolarmente.");
     }
 }
+

@@ -221,7 +221,7 @@ public class QueueRepository : IQueueRepository
 
         string searchClause = string.IsNullOrWhiteSpace(search)
             ? ""
-            : "AND (l.MG87_GUID LIKE @Search OR d.DO11_NUMDOC LIKE @SearchNum OR d.RAGIONE_SOCIALE LIKE @Search OR d.DO30_CODART_MG66 LIKE @Search)";
+            : "AND (l.MG87_GUID LIKE @Search OR d.DO11_NUMDOC LIKE @SearchNum OR d.RAGIONE_SOCIALE LIKE @Search OR d.DO30_CODART_MG66 LIKE @Search OR l.RICHIESTA_JSON LIKE @Search)";
 
         int.TryParse(search, out int searchNum);
 

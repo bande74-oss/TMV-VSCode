@@ -65,3 +65,4 @@ public class NkePayloadDetailDto
     public string RispostaJson { get; set; } = string.Empty;
     public string? MessaggioErrore { get; set; }
 }
+

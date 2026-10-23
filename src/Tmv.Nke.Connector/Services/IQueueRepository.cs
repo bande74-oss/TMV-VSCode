@@ -17,3 +17,4 @@ public interface IQueueRepository
     Task<int> ExecuteOrderForceAsync(int numDoc, short? annoDoc, string? sezDoc, bool forzaReinvio, string operatore, string ipClient, CancellationToken ct = default);
     Task<int> ExecuteMassiveIngestionAsync(int giorniIndietro, CancellationToken ct = default);
 }
+

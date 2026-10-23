@@ -37,7 +37,7 @@ public class NkeRequestPayload
 
         var optPadded = ((opzione ?? string.Empty) + "-----------------").Replace(' ', '-');
         var optPart1 = optPadded.Length >= 5 ? optPadded.Substring(0, 5) : optPadded.PadRight(5, '-');
-        var optPart2 = optPadded.Length >= 11 ? optPadded.Substring(5, 6) : "------";
+        var optPart2 = optPadded.Length >= 17 ? optPadded.Substring(11, 6) : "------";
 
         return $"{part1}---{part2}{optPart1}------{optPart2}";
     }
@@ -74,3 +74,4 @@ public class NkeCallResult
     public string? ErrorMessage { get; set; }
     public bool IsTimeout { get; set; }
 }
+

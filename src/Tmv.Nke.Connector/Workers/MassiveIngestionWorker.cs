@@ -69,3 +69,4 @@ public class MassiveIngestionWorker : BackgroundService
         _logger.LogInformation("MassiveIngestionWorker arrestato.");
     }
 }
+
