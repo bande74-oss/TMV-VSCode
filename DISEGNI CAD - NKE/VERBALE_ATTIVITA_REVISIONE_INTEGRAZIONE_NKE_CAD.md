@@ -176,3 +176,4 @@ L'intervento è da considerarsi **completato con pieno successo**:
 ---
 *SOLVERIS – Servizi e Soluzioni per l'Impresa*  
 *Bandera Marco*
+
