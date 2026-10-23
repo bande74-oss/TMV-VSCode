@@ -1,3 +1,7 @@
 scratch/
 *.tmp
+bin/
+obj/
+**/bin/
+**/obj/
 
