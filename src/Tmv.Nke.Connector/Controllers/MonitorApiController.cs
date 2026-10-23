@@ -31,18 +31,24 @@ public class MonitorApiController : ControllerBase
     [HttpGet("status")]
     public async Task<ActionResult<ApiResponse<ServiceStatusDto>>> GetStatus(CancellationToken ct)
     {
-        bool nkeHealthy = await _nkeApiClient.CheckHealthAsync(ct);
-        bool dbConnected = false;
+        var nkeTask = _nkeApiClient.CheckHealthAsync(CancellationToken.None);
+        var dbTask = Task.Run(async () =>
+        {
+            try
+            {
+                await _queueRepository.GetLastCallTimeAsync(CancellationToken.None);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Errore connessione database durante health check.");
+                return false;
+            }
+        });
 
-        try
-        {
-            await _queueRepository.GetLastCallTimeAsync(ct);
-            dbConnected = true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Errore connessione database durante health check.");
-        }
+        await Task.WhenAll(nkeTask, dbTask);
+        bool nkeHealthy = await nkeTask;
+        bool dbConnected = await dbTask;
 
         var status = new ServiceStatusDto
         {
@@ -146,3 +152,4 @@ public class MonitorApiController : ControllerBase
         }
     }
 }
+

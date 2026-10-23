@@ -96,12 +96,9 @@ public class NkeApiClient : INkeApiClient
     {
         try
         {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(1500));
             using var req = new HttpRequestMessage(HttpMethod.Get, _settings.NkeApiEndpoint);
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(3));
-
             using var resp = await _httpClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-            // Qualsiasi risposta ricevuta dal server (anche 404 o 405 sul GET) indica che il web service è raggiungibile
             return true;
         }
         catch
@@ -156,3 +153,4 @@ public class NkeApiClient : INkeApiClient
         return false;
     }
 }
+

@@ -5,7 +5,11 @@ using Tmv.Nke.Connector.Configuration;
 using Tmv.Nke.Connector.Services;
 using Tmv.Nke.Connector.Workers;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory
+});
 
 // Abilita l'esecuzione come Servizio Windows se installato come service, o da console se avviato manualmente
 builder.Host.UseWindowsService();
