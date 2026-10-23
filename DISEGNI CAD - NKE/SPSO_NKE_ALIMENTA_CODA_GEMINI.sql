@@ -70,6 +70,12 @@
 --    non vengono re-inoltrati automaticamente per non saturare Inventor. Il recupero di righe fallite (RT13_FILE_GENERATO = 0)
 --    avviene quando l'operatore interroga o forza la specifica conferma d'ordine (@NumDoc = ...).
 -- 2. Protezione anti-duplicazione su RT13_NKE_DOCS_GEMINI: inserito controllo NOT EXISTS per evitare record duplicati in caso di rilanci forzati multipli.
+--
+-- Rev. 3 | 2026-10-23 15:50 | SOLVERIS - Bandera Marco
+-- Perfezionamento filtro merceologico righe d'ordine:
+-- Inserito filtro tassativo 'c.DO30_INDTIPORIGA = 0' nella selezione delle righe corpo (DO30_DOCCORPO).
+-- Esclude dal flusso di generazione CAD le righe speciali, descrittive, di spesa o di nota tecnica (DO30_INDTIPORIGA <> 0)
+-- che possono occasionalmente recare un codice articolo a 14 caratteri ma che non rappresentano articoli fisici normali.
 -- =================================================================================================================================
 
 CREATE OR ALTER PROCEDURE [dbo].[SPSO_NKE_ALIMENTA_CODA_GEMINI]
@@ -232,6 +238,7 @@ BEGIN
     WHERE d.DO11_DITTA_CG18 = 1
       AND d.DO11_DOCUM_MG36 IN ('DC-ORDINE', 'DC-ORDGAR')
       AND d.DO11_TIPODOC = 21
+      AND c.DO30_INDTIPORIGA = 0
       AND LEN(TRIM(c.DO30_CODART_MG66)) = 14
       AND s.CO4C_IDSTATO IN (10046, 10048, 10049, 10050, 10051, 10054, 10055)
       AND (
