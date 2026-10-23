@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Tmv.Nke.Connector.Configuration;
+using Tmv.Nke.Connector.Services;
+using Tmv.Nke.Connector.Workers;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,6 +23,11 @@ builder.WebHost.ConfigureKestrel(options =>
 
 // Aggiunge servizi API e file statici
 builder.Services.AddControllers();
+
+// Registra Client HTTP, Repository e Background Workers
+builder.Services.AddHttpClient<INkeApiClient, NkeApiClient>();
+builder.Services.AddSingleton<IQueueRepository, QueueRepository>();
+builder.Services.AddHostedService<DispatcherWorker>();
 
 var app = builder.Build();
 
