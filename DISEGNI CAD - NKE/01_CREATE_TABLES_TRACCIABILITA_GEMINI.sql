@@ -107,3 +107,18 @@ BEGIN
     PRINT 'Tabella [dbo].[RT13_NKE_LOG_DETAIL_GEMINI] già presente nel database DBTMV.';
 END
 GO
+
+-- =================================================================================================================================
+-- INDICE ESSENZIALE PER PERFORMANCE DELTA ENGINE SU [dbo].[RT13_NKE_LOG]
+-- =================================================================================================================================
+-- La tabella di log standard contiene oltre 1.1 milioni di righe storiche.
+-- Per evitare costose scansioni tabellari (Table Scan) ad ogni esecuzione della procedura di alimentazione coda,
+-- si crea l'indice coprente su MG87_GUID e flag RT13_FILE_GENERATO.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_RT13_NKE_LOG_MG87_GENERATO' AND object_id = OBJECT_ID('dbo.RT13_NKE_LOG'))
+BEGIN
+    CREATE NONCLUSTERED INDEX IX_RT13_NKE_LOG_MG87_GENERATO 
+    ON dbo.RT13_NKE_LOG (MG87_GUID, RT13_FILE_GENERATO);
+
+    PRINT 'Indice [IX_RT13_NKE_LOG_MG87_GENERATO] creato con successo su RT13_NKE_LOG.';
+END
+GO
