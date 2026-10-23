@@ -27,7 +27,9 @@ builder.Services.AddControllers();
 // Registra Client HTTP, Repository e Background Workers
 builder.Services.AddHttpClient<INkeApiClient, NkeApiClient>();
 builder.Services.AddSingleton<IQueueRepository, QueueRepository>();
+builder.Services.AddSingleton<IExecutionCoordinator, ExecutionCoordinator>();
 builder.Services.AddHostedService<DispatcherWorker>();
+builder.Services.AddHostedService<MassiveIngestionWorker>();
 
 var app = builder.Build();
 
