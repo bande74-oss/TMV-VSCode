@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TMV - Monitor Cella Robotizzata CAD NKE</title>
+    <link rel="stylesheet" href="/css/dashboard.css">
+</head>
+<body>
+
+    <!-- Barra Superiore (Header Aziendale) -->
+    <header class="topbar">
+        <div class="topbar-brand">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                <line x1="8" y1="21" x2="16" y2="21"/>
+                <line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+            <h1>TMV &bull; Monitor Cella Robotizzata CAD NKE</h1>
+            <span class="tag">Server APP &bull; v1.0</span>
+        </div>
+        <div class="topbar-status">
+            <div class="status-indicator">
+                <div class="status-dot online" id="statusDot"></div>
+                <span id="statusText">Connessione in corso...</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Contenitore Principale -->
+    <main class="container">
+
+        <!-- Griglia Indicatori KPI -->
+        <section class="kpi-grid">
+            <div class="kpi-card">
+                <span class="kpi-title">In Coda Attiva</span>
+                <span class="kpi-value" id="kpiInCoda" style="color: #2563EB;">-</span>
+                <span class="kpi-desc">Richieste in attesa per NKE</span>
+            </div>
+            <div class="kpi-card">
+                <span class="kpi-title">Inviati (Ultime 24h)</span>
+                <span class="kpi-value" id="kpiInviati" style="color: #15803D;">-</span>
+                <span class="kpi-desc">Generazioni completate con successo</span>
+            </div>
+            <div class="kpi-card">
+                <span class="kpi-title">Errori (Ultime 24h)</span>
+                <span class="kpi-value" id="kpiErrori" style="color: #DC2626;">-</span>
+                <span class="kpi-desc">Timeout o anomalie WebAPI NKE</span>
+            </div>
+            <div class="kpi-card">
+                <span class="kpi-title">Latenza Media</span>
+                <span class="kpi-value mono" id="kpiLatenza">-</span>
+                <span class="kpi-desc">Tempo medio risposta Inventor</span>
+            </div>
+        </section>
+
+        <!-- Barra Azione Rapida e Forzatura Ordine -->
+        <section class="action-box">
+            <div class="action-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                Gestione e Forzatura Disegni per Conferma d'Ordine
+            </div>
+            <div class="action-form">
+                <div class="form-group">
+                    <label for="inputNumDoc">N° Ordine:</label>
+                    <input type="number" id="inputNumDoc" class="form-input" placeholder="Es. 5519" style="width: 120px;" required>
+                </div>
+                <div class="form-group">
+                    <label for="inputOperatore">Operatore / Sigla:</label>
+                    <input type="text" id="inputOperatore" class="form-input" placeholder="Es. MB / UffTecnico" value="UffTecnico" style="width: 140px;">
+                </div>
+                <div class="form-group" style="margin-left: 6px;">
+                    <input type="checkbox" id="checkForza" style="cursor: pointer;">
+                    <label for="checkForza" style="cursor: pointer;">Forza Reinvio (Sovrascrivi file esistenti)</label>
+                </div>
+                <div style="margin-left: auto; display: flex; gap: 8px;">
+                    <button class="btn btn-secondary" onclick="simulateOrder()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                        </svg>
+                        Simula (Dry-Run)
+                    </button>
+                    <button class="btn btn-primary" onclick="forceOrder()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="5 3 19 12 5 21 5 3"/>
+                        </svg>
+                        Invia Subito a NKE
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Pannello Dati con Tab Coda / Log -->
+        <section class="data-panel">
+            <div class="panel-header">
+                <div class="tabs">
+                    <button class="tab-btn active" id="tab-logs" onclick="switchTab('logs')">Log Operativo Chiamate</button>
+                    <button class="tab-btn" id="tab-queue" onclick="switchTab('queue')">Coda Attiva in Transito</button>
+                </div>
+                <div class="search-box">
+                    <input type="text" id="searchInput" class="search-input" placeholder="Cerca ordine, cliente o articolo...">
+                </div>
+            </div>
+            <div class="table-wrapper">
+                <table>
+                    <thead id="tableHead"></thead>
+                    <tbody id="tableBody">
+                        <tr><td colspan="9" style="text-align: center; padding: 24px; color: #94A3B8;">Caricamento in corso...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Modale per Dettaglio Payload o Simulazione -->
+    <div class="modal-overlay" id="detailModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle" style="font-size: 15px; font-weight: 700;">Dettaglio</h3>
+                <button onclick="closeModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: #64748B;">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <!-- Contenuto dinamico iniettato via JS -->
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal()">Chiudi</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/dashboard.js"></script>
+</body>
+</html>
